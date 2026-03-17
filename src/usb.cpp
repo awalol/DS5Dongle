@@ -86,6 +86,7 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
     uint8_t channelNum = TU_U16_LOW(p_request->wValue);
     uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
     uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
+    // 当前音量的调节不会影响音量大小，看看后面有没有用再补全吧
 
     // If request is for our speaker feature unit
     if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
@@ -107,14 +108,14 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
 
                     case AUDIO10_CS_REQ_GET_MIN:
                         TU_LOG2("    Get Volume min of channel: %u\r\n", channelNum); {
-                            int16_t min = -90; // -90 dB
+                            int16_t min = -100; // -100 dB
                             min = min * 256; // convert to 1/256 dB units
                             return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &min, sizeof(min));
                         }
 
                     case AUDIO10_CS_REQ_GET_MAX:
                         TU_LOG2("    Get Volume max of channel: %u\r\n", channelNum); {
-                            int16_t max = 30; // +30 dB
+                            int16_t max = 0; // 0 dB
                             max = max * 256; // convert to 1/256 dB units
                             return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &max, sizeof(max));
                         }
