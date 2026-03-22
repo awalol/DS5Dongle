@@ -9,6 +9,8 @@
 #include "resample.h"
 #include "audio.h"
 #include "pico/cyw43_arch.h"
+// #include "pico/stdlib.h"
+#include <vector>
 
 int reportSeqCounter = 0;
 uint8_t packetCounter = 0;
@@ -69,21 +71,31 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 
     switch (buffer[0]) {
         case 0x02: {
-            uint8_t outputData[78];
-            outputData[0] = 0x31;
-            outputData[1] = reportSeqCounter << 4;
+            constexpr auto PACKET_SIZE = 78;
+            if (bufsize - 1 > PACKET_SIZE - 4) { // 4字节报文头
+                break;
+            }
+
+            // uint8_t outputData[78];
+            std::vector<uint8_t> pkt;
+            pkt.assign(1 + PACKET_SIZE, 0);
+            pkt[0] = BT_WRITE_PACKET_HEAD;
+            pkt[1] = 0x31;
+            pkt[2] = reportSeqCounter << 4;
             if (++reportSeqCounter == 256) {
                 reportSeqCounter = 0;
             }
-            outputData[2] = 0x10;
-            memcpy(outputData + 3, buffer + 1, bufsize - 1);
-            bt_write(outputData, sizeof(outputData));
+            pkt[3] = 0x10;
+            
+            memcpy(pkt.data() + 4, buffer + 1, bufsize - 1);
+            bt_write(std::move(pkt));
             break;
         }
     }
 }
 
 int main() {
+    // stdio_init_all();
     board_init();
 
     tusb_rhport_init_t dev_init = {

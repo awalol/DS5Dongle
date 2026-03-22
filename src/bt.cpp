@@ -369,9 +369,13 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
                     init_feature();
                     // 初始化手柄状态
-                    uint8_t report32[142];
-                    report32[0] = 0x32;
-                    report32[1] = 0x10; // reportSeqCounter
+                    constexpr auto PACKET_SIZE = 142;
+                    // uint8_t report32[142];
+                    std::vector<uint8_t> pkt;
+                    pkt.assign(1 + PACKET_SIZE, 0);
+                    pkt[0] = BT_WRITE_PACKET_HEAD;
+                    pkt[1] = 0x32;
+                    pkt[2] = 0x10; // reportSeqCounter
                     uint8_t packet_0x10[] =
                     {
                         0x90, // Packet: 0x10
@@ -387,8 +391,8 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                         0x00,
                         0xff, 0xd7, 0x00 // RGB LED: R, G, B (Nijika Color!)✨
                     };
-                    memcpy(report32 + 2, packet_0x10, sizeof(packet_0x10));
-                    bt_write(report32, sizeof(report32));
+                    memcpy(pkt.data() + 3, packet_0x10, sizeof(packet_0x10));
+                    bt_write(std::move(pkt));
                 } else {
                     printf("[L2CAP] Unknown Channel psm: 0x%02X", psm);
                 }
@@ -431,43 +435,49 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
         }
 
         case L2CAP_EVENT_CAN_SEND_NOW: {
-            // printf("[L2CAP] L2CAP_EVENT_CAN_SEND_NOW\n");
-
             critical_section_enter_blocking(&queue_lock);
             if (send_queue.empty()) {
                 critical_section_exit(&queue_lock);
                 break;
             }
-            std::vector<uint8_t> data = send_queue.front();
+            // 使用 move 避免深拷贝堆分配
+            std::vector<uint8_t> data = std::move(send_queue.front());
             send_queue.pop();
+            bool has_more = !send_queue.empty();
             critical_section_exit(&queue_lock);
 
             uint8_t status = l2cap_send(hid_interrupt_cid, data.data(), data.size());
             if (status != 0) {
                 printf("[L2CAP] Interrupt Error, Status: 0x%02X\n", status);
             }
-            l2cap_request_can_send_now_event(hid_interrupt_cid);
+            // 仅队列非空时继续请求，避免空转
+            if (has_more) {
+                l2cap_request_can_send_now_event(hid_interrupt_cid);
+            }
             break;
         }
     }
 }
 
-void bt_write(uint8_t *data, uint16_t len) {
+
+#define BT_QUEUE_MAX 6
+
+// 音频零拷贝发送：接收含 0xA2 前缀的完整包（已由调用方直接构建），
+// 仅计算 checksum 后以 move 入队，全程无 memcpy。
+void bt_write(std::vector<uint8_t>&& packet) {
     if (hid_interrupt_cid == 0) return;
-    std::vector<uint8_t> packet(len + 1);
-    packet[0] = 0xA2;
-    memcpy(packet.data() + 1, data, len);
-    fill_output_report_checksum(packet.data() + 1, len);
+    fill_output_report_checksum(packet.data() + 1, packet.size() - 1);
 
     critical_section_enter_blocking(&queue_lock);
-    send_queue.push(std::move(packet)); // 使用 std::move 避免深拷贝
+    // 队列过深说明 BT 追不上，丢弃最旧的包以维持低延迟
+    while (send_queue.size() >= BT_QUEUE_MAX) {
+        send_queue.pop();
+    }
+    bool was_empty = send_queue.empty();
+    send_queue.push(std::move(packet));
     critical_section_exit(&queue_lock);
 
-    if (hid_interrupt_cid == 0) {
-        printf("[L2CAP bt_write] Warning: hid_interrupt_cid 0");
-        return;
-    }
-    if (send_queue.size() == 1) {
+    if (was_empty) {
         l2cap_request_can_send_now_event(hid_interrupt_cid);
     }
 }

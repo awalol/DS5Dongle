@@ -122,7 +122,9 @@
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX          CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX           196
 
-#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ       (6 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
+// 减小 SW 缓冲区以降低 USB 侧积压延迟（原 6× ≈ 6ms，改为 3× ≈ 3ms）
+// 若出现音频丢帧，可酌情调大为 4×
+#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ       (3 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ        (4 * CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX)
 
 // Enable OUT EP (speaker) and IN EP (mic)
