@@ -8,6 +8,10 @@
 #include "tusb.h"
 #include "usb.h"
 #include <algorithm>
+#include <chrono>
+#include <iostream>
+
+#include "class/vendor/vendor_device.h"
 
 #define INPUT_CHANNELS    4
 #define OUTPUT_CHANNELS   2
@@ -20,8 +24,6 @@
 static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
-static uint8_t speaker_buf[256];
-static bool speaker_send = true;
 
 void audio_loop() {
     // 1. 读取 USB 音频数据
@@ -60,12 +62,7 @@ void audio_loop() {
         if (haptic_buf_pos != SAMPLE_SIZE) {
             continue;
         }
-        if (speaker_send) {
-            send_combine(speaker_buf,haptic_buf);
-            speaker_send = false;
-        }else {
-            send_haptics(haptic_buf);
-        }
+        send_haptics(haptic_buf);
         haptic_buf_pos = 0;
     }
 }
@@ -116,7 +113,7 @@ void send_speaker(const uint8_t* data) {
 // 当前扬声器的逻辑是：扬声器要480frames，震动是512frames (32 * 16)，所以扬声器会先完成编码。
 // 将编码完成的数据进行存储，在震动的时候一起发送出去。
 // 正好也在之前HeadsetPlayMusic的Demo里面，10.666ms的周期发送才播放正常，而这个值也是震动的发送周期时间，具体计算请看SAXense
-void send_combine(const uint8_t* speaker,const int8_t* haptics) {
+void send_combine(const uint8_t* speaker,const uint8_t* haptics) {
     static uint8_t pkt[334] = {};
     pkt[0] = 0x35;
     pkt[1] = reportSeqCounter << 4;
@@ -150,48 +147,37 @@ void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
     (void)idx;
     (void)buffer;
     (void)bufsize;
-
-    static int speaker_buf_pos = 0;
-    static uint8_t buf[64];
-    static uint8_t save[256];
-    static bool wait = false;
-
-    const uint32_t count = tud_vendor_read(buf,sizeof(buf));
-    // 防溢出
-    if (wait) {
-        if (count == 12) {
-            wait = false;
-            speaker_buf_pos = 0;
-        }
-        return;
-    }
-    if (speaker_buf_pos + count > 204) {
-        wait = true;
-        return;
-    }
-    memcpy(save + speaker_buf_pos,buf,count);
-    speaker_buf_pos += count;
-    if (count == 12) {
-        memcpy(speaker_buf,save,200);
-        speaker_buf_pos = 0;
-        speaker_send = true;
-    }
 }
 
 // 未启用，备用
-/*void vendor_loop() {
-    if (!tud_vendor_available()) {
-        return;
+void vendor_loop() {
+    while (tud_vendor_available()) {
+        static int speaker_buf_pos = 0;
+        static uint8_t buf[64];
+        static uint8_t save[264];
+        static bool wait = false;
+
+        const uint32_t count = tud_vendor_read(buf,sizeof(buf));
+        // 防溢出
+        if (wait) {
+            if (count == 8) {
+                wait = false;
+                speaker_buf_pos = 0;
+            }
+            return;
+        }
+        if (speaker_buf_pos + count > 264) {
+            wait = true;
+            return;
+        }
+        memcpy(save + speaker_buf_pos,buf,count);
+        speaker_buf_pos += count;
+        if (count == 8) {
+            static auto last = time_us_32();
+            auto now = time_us_32();
+            // send_combine(save,save + 200);
+            std::cout << (now - last) << std::endl;
+            last = now;
+        }
     }
-    static int speaker_buf_pos = 0;
-    static uint8_t buf[64];
-    static uint8_t save[256];
-    const uint32_t count = tud_vendor_read(buf,sizeof(buf));
-    memcpy(save + speaker_buf_pos,buf,count);
-    speaker_buf_pos += count;
-    if (count == 12) {
-        memcpy(speaker_buf,save,200);
-        speaker_buf_pos = 0;
-        speaker_send = true;
-    }
-}*/
+}

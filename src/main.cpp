@@ -104,8 +104,8 @@ int main() {
     while (1) {
         cyw43_arch_poll();
         tud_task();
-        // vendor_loop();
-        audio_loop();
+        vendor_loop();
+        // audio_loop();
         interrupt_loop();
         // TODO:
         // 把蓝牙的工作移到 core1
