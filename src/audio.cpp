@@ -174,8 +174,9 @@ void vendor_loop() {
         speaker_buf_pos += count;
         if (count == 8) {
             static auto last = time_us_32();
+            send_combine(save,save + 200);
+            speaker_buf_pos = 0;
             auto now = time_us_32();
-            // send_combine(save,save + 200);
             std::cout << (now - last) << std::endl;
             last = now;
         }
