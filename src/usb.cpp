@@ -7,8 +7,8 @@
 #include "usb.h"
 #include "usb_descriptors.h"
 
-uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
-int16_t volume[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
+uint8_t mute[2] = {0}; // 0: SPEAKER(0x02) 1: MIC(0x05)
+float volume[2] = {0}; // 0: SPEAKER(0x02) 1: MIC(0x05)
 
 #define UAC1_ENTITY_SPK_FEATURE_UNIT    0x02
 #define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05

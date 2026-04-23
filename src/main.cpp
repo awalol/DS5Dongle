@@ -101,11 +101,12 @@ int main() {
 
     audio_init();
 
-    while (1) {
+    while (true) {
         cyw43_arch_poll();
         tud_task();
+        haptics_proc();
         vendor_loop();
-        // audio_loop();
+        audio_loop();
         interrupt_loop();
         // TODO:
         // 把蓝牙的工作移到 core1

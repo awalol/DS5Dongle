@@ -11,6 +11,7 @@
 #include <chrono>
 #include <iostream>
 
+#include "CircularBuffer.h"
 #include "class/vendor/vendor_device.h"
 
 #define INPUT_CHANNELS    4
@@ -24,11 +25,16 @@
 static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
+static CircularBuffer audioBuffer(200 * 10);
+static CircularBuffer hapticsBuffer(64 * 10);
+static bool audioCache = true;
+static bool hapticsCache = true;
 
-void audio_loop() {
-    // 1. 读取 USB 音频数据
+void haptics_proc() {
+
     if (!tud_audio_available()) return;
 
+    // 每次读入384bytes
     static int16_t raw[192];
     uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
     int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
@@ -49,25 +55,19 @@ void audio_loop() {
     static WDL_ResampleSample out_buf[SAMPLE_SIZE];  // 64 floats = 32帧 × 2ch
     int out_frames = resampler.ResampleOut(out_buf, nframes, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
 
-    static int8_t haptic_buf[SAMPLE_SIZE];
-    static int haptic_buf_pos = 0;
-
-    // 4. 转换为int8并缓冲，满64字节即组包发送
     for (int i = 0; i < out_frames; i++) {
-        int val_l = (int) (out_buf[i * 2] * 127.0f * (volume[0] ?: 1));
-        int val_r = (int) (out_buf[i * 2 + 1] * 127.0f * (volume[0] ?: 1));
-        haptic_buf[haptic_buf_pos++] = (int8_t) std::clamp(val_l, -128, 127);
-        haptic_buf[haptic_buf_pos++] = (int8_t) std::clamp(val_r, -128, 127);
-
-        if (haptic_buf_pos != SAMPLE_SIZE) {
-            continue;
-        }
-        send_haptics(haptic_buf);
-        haptic_buf_pos = 0;
+        int val_l = (int) (out_buf[i * 2] * 127.0f * volume[0]);
+        int val_r = (int) (out_buf[i * 2 + 1] * 127.0f * volume[0]);
+        uint8_t c_l = (uint8_t) std::clamp(val_l, -128, 127);
+        uint8_t c_r = (uint8_t) std::clamp(val_r, -128, 127);
+        hapticsBuffer.Write(&c_l,0,1);
+        hapticsBuffer.Write(&c_r,0,1);
     }
+
+    return;
 }
 
-void send_haptics(const int8_t* data) {
+void send_haptics(const uint8_t* data) {
     static uint8_t pkt[REPORT_SIZE] = {};
     pkt[0] = REPORT_ID;
     pkt[1] = reportSeqCounter << 4;
@@ -103,16 +103,13 @@ void send_speaker(const uint8_t* data) {
     pkt[8] = BUFFER_LENGTH;
     pkt[9] = BUFFER_LENGTH; // buffer length
     pkt[10] = packetCounter++;
-    pkt[11] = 0x16 | 0 << 6 | 1 << 7; // Speaker: 0x13 Headset: 0x16
+    pkt[11] = 0x13 | 0 << 6 | 1 << 7; // Speaker: 0x13 Headset: 0x16
     pkt[12] = 200;
     memcpy(pkt + 13, data, 200);
 
     bt_write(pkt, sizeof(pkt));
 }
 
-// 当前扬声器的逻辑是：扬声器要480frames，震动是512frames (32 * 16)，所以扬声器会先完成编码。
-// 将编码完成的数据进行存储，在震动的时候一起发送出去。
-// 正好也在之前HeadsetPlayMusic的Demo里面，10.666ms的周期发送才播放正常，而这个值也是震动的发送周期时间，具体计算请看SAXense
 void send_combine(const uint8_t* speaker,const uint8_t* haptics) {
     static uint8_t pkt[334] = {};
     pkt[0] = 0x35;
@@ -136,8 +133,72 @@ void send_combine(const uint8_t* speaker,const uint8_t* haptics) {
     bt_write(pkt, sizeof(pkt));
 }
 
+void audio_loop() {
+    static auto lastTime = time_us_32();
+    auto now = time_us_32();
+    if (now - lastTime < 10000) {
+        return;
+    }
+    lastTime = now;
+
+    static uint8_t k = 0;
+    if (++k == 16) {
+        k = 0;
+        return;
+    }
+
+    // 记录是否有震动和音频的数据
+    bool haptics = false;
+    bool audio = false;
+    uint8_t hapticsData[64] = {};
+    if (hapticsCache) {
+        if (hapticsBuffer.Count() >= 64 * 5) {
+            hapticsCache = false;
+        }
+    }else {
+        if (hapticsBuffer.Count() >= 64) {
+            hapticsCache = false;
+            hapticsBuffer.Read(hapticsData,0,64);
+            haptics = true;
+        }else {
+            printf("enter haptics cache state\n");
+            hapticsCache = true;
+        }
+    }
+    uint8_t audioData[200] = {};
+    if (audioCache) {
+        if (audioBuffer.Count() >= 200 * 5) {
+            audioCache = false;
+        }
+    }else {
+        if (audioBuffer.Count() >= 200) {
+            audioCache = false;
+            audioBuffer.Read(audioData,0,200);
+            audio = true;
+        }else {
+            printf("enter audio cache state\n");
+            audioCache = true;
+        }
+    }
+    if (haptics && audio) {
+        send_combine(audioData,hapticsData);
+    }else if (haptics) {
+        send_haptics(hapticsData);
+    }else if (audio) {
+        send_speaker(audioData);
+    }
+}
+
+// 当前扬声器的逻辑是：扬声器要480frames，震动是512frames (32 * 16)，所以扬声器会先完成编码。
+// 将编码完成的数据进行存储，在震动的时候一起发送出去。
+// 正好也在之前HeadsetPlayMusic的Demo里面，10.666ms的周期发送才播放正常，而这个值也是震动的发送周期时间，具体计算请看SAXense
+// 神奇参数: 16 * 10 / 15 = 10.666
+// ++k % 16 == 0 jump
+
 void audio_init() {
     resampler.SetMode(true, 0, false);
+    // resampler.SetMode(true,1,false); // filtercnt 最大为1, 设置为2会卡顿
+    // resampler.SetFilterParms();
     resampler.SetRates(48000, 3000);
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 480, 32);
@@ -154,7 +215,7 @@ void vendor_loop() {
     while (tud_vendor_available()) {
         static int speaker_buf_pos = 0;
         static uint8_t buf[64];
-        static uint8_t save[264];
+        static uint8_t save[256];
         static bool wait = false;
 
         const uint32_t count = tud_vendor_read(buf,sizeof(buf));
@@ -166,19 +227,15 @@ void vendor_loop() {
             }
             return;
         }
-        if (speaker_buf_pos + count > 264) {
+        if (speaker_buf_pos + count > 200) {
             wait = true;
             return;
         }
         memcpy(save + speaker_buf_pos,buf,count);
         speaker_buf_pos += count;
         if (count == 8) {
-            static auto last = time_us_32();
-            send_combine(save,save + 200);
+            audioBuffer.Write(save,0,200);
             speaker_buf_pos = 0;
-            auto now = time_us_32();
-            std::cout << (now - last) << std::endl;
-            last = now;
         }
     }
 }
