@@ -1,0 +1,57 @@
+name: Build DS5Dongle Firmware
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 允许你手动点击运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出代码及其子模块
+      - name: Checkout DS5Dongle
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # 2. 安装 ARM 交叉编译器和 CMake
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential cmake
+
+      # 3. 设置 Pico SDK 并在内部升级 TinyUSB (匹配你的项目要求)
+      - name: Setup Pico SDK & Upgrade TinyUSB
+        run: |
+          git clone --depth 1 https://github.com/raspberrypi/pico-sdk.git
+          cd pico-sdk
+          git submodule update --init --depth 1
+          
+          # 进入 tinyusb 目录并升级到最新版
+          cd lib/tinyusb
+          git fetch origin master
+          git checkout origin/master
+          cd ../..
+          
+          # 将 SDK 路径写入环境变量
+          echo "PICO_SDK_PATH=$(pwd)" >> $GITHUB_ENV
+
+      # 4. 执行编译 (针对 Pico 2 W / RP2350)
+      - name: Compile Firmware
+        run: |
+          mkdir build
+          cd build
+          # 指定为 pico2_w 对应 RP2350 架构
+          cmake .. -DPICO_BOARD=pico2_w
+          make -j$(nproc)
+
+      # 5. 上传生成的固件
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DS5Dongle-UF2-Firmware
+          path: build/*.uf2
