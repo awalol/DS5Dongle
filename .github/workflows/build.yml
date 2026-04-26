@@ -40,7 +40,15 @@ jobs:
           # 将 SDK 路径写入环境变量
           echo "PICO_SDK_PATH=$(pwd)" >> $GITHUB_ENV
 
-      # 4. 执行编译 (针对 Pico 2 W / RP2350)
+      # 4. 补充拉取缺失的 Opus 依赖库 (修复 CMake 报错)
+      - name: Fetch missing lib/opus
+        run: |
+          mkdir -p lib
+          if [ ! -d "lib/opus" ] || [ -z "$(ls -A lib/opus)" ]; then
+            git clone https://github.com/xiph/opus.git lib/opus
+          fi
+
+      # 5. 执行编译 (针对 Pico 2 W / RP2350)
       - name: Compile Firmware
         run: |
           mkdir build
@@ -49,7 +57,7 @@ jobs:
           cmake .. -DPICO_BOARD=pico2_w
           make -j$(nproc)
 
-      # 5. 上传生成的固件
+      # 6. 上传生成的固件
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
