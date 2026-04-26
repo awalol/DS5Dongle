@@ -9,6 +9,7 @@
 #include "resample.h"
 #include "audio.h"
 #include "hardware/clocks.h"
+#include "hardware/vreg.h"
 #include "pico/cyw43_arch.h"
 
 int reportSeqCounter = 0;
@@ -88,6 +89,8 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 }
 
 int main() {
+    vreg_set_voltage(VREG_VOLTAGE_1_20);
+    sleep_ms(1000);
     set_sys_clock_khz(270000, true);
     board_init();
 

@@ -112,9 +112,9 @@ void audio_loop() {
         memcpy(pkt + 13, haptic_buf, SAMPLE_SIZE);
         if (!queue_is_empty(&opus_fifo)) {
             pkt[77] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7; // Speaker: 0x13
-                                              // L Headset Mono: 0x14
-                                              // L Headset R Speaker: 0x15
-                                              // Headset: 0x16
+                                                                      // L Headset Mono: 0x14
+                                                                      // L Headset R Speaker: 0x15
+                                                                      // Headset: 0x16
             pkt[78] = 200;
             opus_element opus_element{};
             if (!queue_try_remove(&opus_fifo,&opus_element)) {
