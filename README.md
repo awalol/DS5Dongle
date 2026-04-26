@@ -15,7 +15,7 @@
 - 开启麦克风静音为禁用静默断连
 
 # 当前问题:
-- 声音有点小卡顿
+- 声音可能有点小卡顿
 
 # 未来计划
 
@@ -25,4 +25,4 @@
 # 致谢
  - [rafaelvaloto/Pico_W-Dualsense](https://github.com/rafaelvaloto/Pico_W-Dualsense) - 灵感来源
  - [egormanga/SAxense](https://github.com/egormanga/SAxense) - 震动报文
- - [https://controllers.fandom.com/wiki/Sony_DualSense](https://controllers.fandom.com/wiki/Sony_DualSense) 数据报文结构
+ - [https://controllers.fandom.com/wiki/Sony_DualSense](https://controllers.fandom.com/wiki/Sony_DualSense) - 数据报文结构

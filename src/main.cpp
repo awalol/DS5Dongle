@@ -94,6 +94,8 @@ int main() {
     };
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
 
+    tud_disconnect();
+
     board_init_after_tusb();
 
     bt_init();
