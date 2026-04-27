@@ -63,7 +63,7 @@ target_compile_definitions(ds5-bridge PRIVATE
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "0.3.2")
+pico_set_program_version(ds5-bridge "0.3.3")
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(ds5-bridge 1)
