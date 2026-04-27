@@ -110,20 +110,16 @@ void audio_loop() {
         pkt[11] = 0x12 | (1 << 7);
         pkt[12] = SAMPLE_SIZE;
         memcpy(pkt + 13, haptic_buf, SAMPLE_SIZE);
-        if (!queue_is_empty(&opus_fifo)) {
+        static opus_element opus_element{};
+        if (queue_try_remove(&opus_fifo,&opus_element)) {
             pkt[77] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7; // Speaker: 0x13
-                                                                      // L Headset Mono: 0x14
-                                                                      // L Headset R Speaker: 0x15
-                                                                      // Headset: 0x16
+            // L Headset Mono: 0x14
+            // L Headset R Speaker: 0x15
+            // Headset: 0x16
             pkt[78] = 200;
-            opus_element opus_element{};
-            if (!queue_try_remove(&opus_fifo,&opus_element)) {
-                printf("[Audio] Warning: opus_fifo try remove failed\n");
-            }else {
-                memcpy(pkt + 79,opus_element.data,200);
-            }
+            memcpy(pkt + 79,opus_element.data,200);
         }else {
-            printf("[Audio] Warning: opus_fifo is empty\n");
+            printf("[Audio] Warning: opus_fifo try remove failed\n");
         }
 
         bt_write(pkt, sizeof(pkt));
