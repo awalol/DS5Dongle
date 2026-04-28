@@ -491,5 +491,6 @@ std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
 void init_feature() {
     get_feature_data(0x09, 20);
     get_feature_data(0x20, 64);
+    get_feature_data(0x22,64);
     get_feature_data(0x05, 41);
 }
