@@ -23,6 +23,9 @@
 // #define VOLUME_GAIN       2
 #define BUFFER_LENGTH     48
 
+using std::clamp;
+using std::max;
+
 static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
@@ -86,10 +89,10 @@ void audio_loop() {
 
     // 4. 转换为int8并缓冲，满64字节即组包发送
     for (int i = 0; i < out_frames; i++) {
-        int val_l = (int) (out_buf[i * 2] * 127.0f * volume[1]);
-        int val_r = (int) (out_buf[i * 2 + 1] * 127.0f * volume[1]);
-        haptic_buf[haptic_buf_pos++] = (int8_t) std::clamp(val_l, -128, 127); // 似乎clamp有点多余？还是以防万一吧
-        haptic_buf[haptic_buf_pos++] = (int8_t) std::clamp(val_r, -128, 127);
+        int val_l = (int) (out_buf[i * 2] * 127.0f * max(volume[1],1.0f));
+        int val_r = (int) (out_buf[i * 2 + 1] * 127.0f * max(volume[1],1.0f));
+        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127); // 似乎clamp有点多余？还是以防万一吧
+        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
 
         if (haptic_buf_pos != SAMPLE_SIZE) {
             continue;

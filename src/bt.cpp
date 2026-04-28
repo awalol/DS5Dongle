@@ -23,6 +23,10 @@
 
 #define MTU 672
 
+using std::unordered_map;
+using std::vector;
+using std::queue;
+
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 
@@ -34,8 +38,8 @@ static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
-std::unordered_map<uint8_t, std::vector<uint8_t> > feature_data;
-static std::queue<std::vector<uint8_t> > send_queue;
+unordered_map<uint8_t, vector<uint8_t> > feature_data;
+static queue<vector<uint8_t> > send_queue;
 static critical_section_t queue_lock;
 uint32_t inactive_time = 0; // 手柄长时间静默
 
@@ -447,7 +451,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 critical_section_exit(&queue_lock);
                 break;
             }
-            std::vector<uint8_t> data = send_queue.front();
+            vector<uint8_t> data = send_queue.front();
             send_queue.pop();
             critical_section_exit(&queue_lock);
 
@@ -463,13 +467,13 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
 void bt_write(uint8_t *data, uint16_t len) {
     if (hid_interrupt_cid == 0) return;
-    std::vector<uint8_t> packet(len + 1);
+    vector<uint8_t> packet(len + 1);
     packet[0] = 0xA2;
     memcpy(packet.data() + 1, data, len);
     fill_output_report_checksum(packet.data() + 1, len);
 
     critical_section_enter_blocking(&queue_lock);
-    send_queue.push(std::move(packet)); // 使用 std::move 避免深拷贝
+    send_queue.push(move(packet)); // 使用 move 避免深拷贝
     critical_section_exit(&queue_lock);
 
     if (hid_interrupt_cid == 0) {
@@ -481,7 +485,7 @@ void bt_write(uint8_t *data, uint16_t len) {
     }
 }
 
-std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
+vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     if (!feature_data.contains(reportId) || feature_data[reportId].empty()) {
         if (hid_control_cid != 0) {
             uint8_t get_feature[] = {0x43, reportId};
