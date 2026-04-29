@@ -141,8 +141,7 @@ void audio_loop() {
 }
 
 void audio_init() {
-    resampler.SetMode(true, 2, false);
-    resampler.SetFilterParms();
+    resampler.SetMode(true, 0, false);
     resampler.SetRates(48000, 3000);
     resampler.SetFeedMode(true);
     // resampler.Prealloc(2, 480, 32);
