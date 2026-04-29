@@ -25,17 +25,9 @@ jobs:
           sudo apt update
           sudo apt install -y cmake python3 build-essential gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib ninja-build
 
-      - name: Cache Pico SDK
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.PICO_SDK_PATH }}
-          key: pico-sdk-${{ runner.os }}-${{ env.PICO_SDK_REF }}-tinyusb-${{ env.TINYUSB_REF }}
-
-      - name: Prepare Pico SDK
+      - name: Download Pico SDK
         run: |
-          if [ ! -d "$PICO_SDK_PATH/.git" ]; then
-            git clone --depth 1 --branch "$PICO_SDK_REF" https://github.com/raspberrypi/pico-sdk.git "$PICO_SDK_PATH"
-          fi
+          git clone --depth 1 --branch "$PICO_SDK_REF" https://github.com/raspberrypi/pico-sdk.git "$PICO_SDK_PATH"
           git -C "$PICO_SDK_PATH" submodule update --init --recursive
 
       - name: Switch TinyUSB to configured tag
