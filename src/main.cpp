@@ -194,7 +194,6 @@ int main() {
         // Check what the PC says the mute state is right now
         bool current_led_state = !mute[0]; 
         
-        // Did the mute state just change?
         if (current_led_state != last_led_state) {
             
             // Update the little green light on the Pico board
@@ -206,6 +205,5 @@ int main() {
             // Save the new state so we don't spam the Bluetooth connection
             last_led_state = current_led_state;
         }
-        // -----------------------
     }
 }
