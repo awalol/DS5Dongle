@@ -180,11 +180,32 @@ int main() {
 
     watchdog_enable(1000, true);
 
+   // Remember what the light was doing last time we checked. 
+    // mute[0] is the speaker mute status. If it is NOT muted, the light should be ON.
+    bool last_led_state = !mute[0]; 
+
     while (1) {
         watchdog_update();
         cyw43_arch_poll();
         tud_task();
         audio_loop();
         interrupt_loop();
+
+        // Check what the PC says the mute state is right now
+        bool current_led_state = !mute[0]; 
+        
+        // Did the mute state just change?
+        if (current_led_state != last_led_state) {
+            
+            // Update the little green light on the Pico board
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, current_led_state);
+            
+            // update the DualSense light instantly
+            bt_update_controller_led(current_led_state);
+            
+            // Save the new state so we don't spam the Bluetooth connection
+            last_led_state = current_led_state;
+        }
+        // -----------------------
     }
 }
