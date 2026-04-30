@@ -518,33 +518,6 @@ void bt_update_controller_led(bool led_on) {
     // If the controller isn't connected, don't do anything
     if (hid_interrupt_cid == 0) return; 
 
-    // Create a blank 142-byte message
-    uint8_t report32[142] = {0}; 
-    report32[0] = 0x32;
-    report32[1] = 0x10; 
-    
-    // The exact magic packet needed to control the DualSense lights
-    uint8_t packet_0x10[] = {
-        0x90, 0x3f, 
-        0xfd, 0xf7, 0x0, 0x0,
-        0x7f, 0x7f, 
-        0xff, 0x9, 0x0, 0xf, 0x0, 0x0, 0x0, 0x0,
-        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa,
-        0x7, 0x0, 0x0, 0x2, 0x1,
-        0x00, 
-        0xff, 0xd7, 0x00 // RGB
-    };
-    
-    memcpy(report32 + 2, packet_0x10, sizeof(packet_0x10));
-
-    // If we want the LED off change the RGB values (bytes 48, 49, 50) to 0
-    if (!led_on) {
-        report32[48] = 0x00; // Red off
-        report32[49] = 0x00; // Green off
-        report32[50] = 0x00; // Blue off
-    }
-
-    bt_write(report32, sizeof(report32));
+    // Sync the controller light to the actual PC mute state on boot
+    bt_update_controller_led(!mute[0]);
 }
