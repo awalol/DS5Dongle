@@ -534,19 +534,17 @@ void bt_update_controller_led(bool led_on) {
         0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa,
         0x7, 0x0, 0x0, 0x2, 0x1,
         0x00, 
-        0xff, 0xd7, 0x00 // RGB Colors!
+        0xff, 0xd7, 0x00 // RGB
     };
     
-    // Copy the magic packet into our message
     memcpy(report32 + 2, packet_0x10, sizeof(packet_0x10));
 
-    // If we want the LED off, change the RGB values (bytes 48, 49, 50) to 0
+    // If we want the LED off change the RGB values (bytes 48, 49, 50) to 0
     if (!led_on) {
         report32[48] = 0x00; // Red off
         report32[49] = 0x00; // Green off
         report32[50] = 0x00; // Blue off
     }
 
-    // Fire it over Bluetooth!
     bt_write(report32, sizeof(report32));
 }
