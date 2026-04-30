@@ -123,14 +123,14 @@ void audio_loop() {
         pkt[11] = 0x12 | (1 << 7);
         pkt[12] = SAMPLE_SIZE;
         memcpy(pkt + 13, haptic_buf, SAMPLE_SIZE);
-        static opus_element opus_element{};
-        if (queue_try_remove(&opus_fifo,&opus_element)) {
+        static opus_element opus_packet{};
+        if (queue_try_remove(&opus_fifo,&opus_packet)) {
             pkt[77] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7; // Speaker: 0x13
             // L Headset Mono: 0x14
             // L Headset R Speaker: 0x15
             // Headset: 0x16
             pkt[78] = 200;
-            memcpy(pkt + 79,opus_element.data,200);
+            memcpy(pkt + 79,opus_packet.data,200);
         }else {
             printf("[Audio] Warning: opus_fifo try remove failed\n");
         }
@@ -179,12 +179,12 @@ void core1_entry() {
         }
         static WDL_ResampleSample out_buf[480 * 2];
         resampler_audio.ResampleOut(out_buf,nframes,480,2);
-        static opus_element opus_element{};
-        (void)opus_encode_float(encoder,out_buf,480,opus_element.data,200);
+        static opus_element opus_packet{};
+        (void)opus_encode_float(encoder,out_buf,480,opus_packet.data,200);
         if (queue_is_full(&opus_fifo)) {
             queue_try_remove(&opus_fifo,NULL);
         }
-        if (!queue_try_add(&opus_fifo,&opus_element)) {
+        if (!queue_try_add(&opus_fifo,&opus_packet)) {
             printf("[Audio] Warning: opus_fifo add failed\n");
         }
     }
