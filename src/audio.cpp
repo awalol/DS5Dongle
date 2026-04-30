@@ -75,7 +75,7 @@ void audio_loop() {
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f * (volume[0] - 1.0f);
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * (volume[0] - 1.0f);
         if (audio_buf_pos == 512 * 2) {
-            audio_raw_element element{};
+            static audio_raw_element element{};
             memcpy(element.data,audio_buf,512 * 2 * 4);
             if (queue_is_full(&audio_fifo)){
                 queue_try_remove(&audio_fifo,NULL);
@@ -91,7 +91,7 @@ void audio_loop() {
     }
 
     // 3. 48kHz -> 3kHz 重采样
-    WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32帧 × 2ch
+    static WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32帧 × 2ch
     int out_frames = resampler.ResampleOut(out_buf, nframes, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
 
     static int8_t haptic_buf[SAMPLE_SIZE];
@@ -169,7 +169,7 @@ void core1_entry() {
     resampler_audio.SetFeedMode(true);
 
     while (true) {
-        audio_raw_element audio_element{};
+        static audio_raw_element audio_element{};
         queue_remove_blocking(&audio_fifo,&audio_element);
         // 将 512 frames 重采样成 480 frames 以解决噪音问题。感谢 @Junhoo
         WDL_ResampleSample *in_buf;
@@ -177,9 +177,9 @@ void core1_entry() {
         for (int i = 0; i < nframes * 2;i++) {
             in_buf[i] = audio_element.data[i];
         }
-        WDL_ResampleSample out_buf[200];
+        static WDL_ResampleSample out_buf[480 * 2];
         resampler_audio.ResampleOut(out_buf,nframes,480,2);
-        opus_element opus_element{};
+        static opus_element opus_element{};
         (void)opus_encode_float(encoder,out_buf,480,opus_element.data,200);
         if (queue_is_full(&opus_fifo)) {
             queue_try_remove(&opus_fifo,NULL);
