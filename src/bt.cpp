@@ -33,7 +33,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
 static bool device_found = false;
-static bool new_pair = false; // 只有新匹配的设备才用创建channel，自动重连走的是service
+static bool new_pair = false; // Only newly paired devices need a fresh channel; auto-reconnect goes through the service
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
@@ -41,7 +41,7 @@ static bt_data_callback_t bt_data_callback = nullptr;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
 static queue<vector<uint8_t> > send_queue;
 static critical_section_t queue_lock;
-uint32_t inactive_time = 0; // 手柄长时间静默
+uint32_t inactive_time = 0; // Controller has been silent for a long time
 
 void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
@@ -72,7 +72,7 @@ bool bt_disconnect() {
 void bt_l2cap_init() {
     l2cap_event_callback_registration.callback = &l2cap_packet_handler;
     l2cap_add_event_handler(&l2cap_event_callback_registration);
-    // 修复重连后自动断开的关键点
+    // Key fix for auto-disconnect after reconnect
     sdp_init();
     l2cap_register_service(l2cap_packet_handler, PSM_HID_CONTROL, MTU, LEVEL_2);
     l2cap_register_service(l2cap_packet_handler, PSM_HID_INTERRUPT, MTU, LEVEL_2);
@@ -325,8 +325,8 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             // printf_hexdump(packet, size);
             bt_data_callback(INTERRUPT, packet, size);
 
-            // 静默检测
-            if (mute[1]) { // 麦克风静音开启
+            // Inactivity detection
+            if (mute[1]) { // Microphone mute is enabled
                 return;
             }
             if (packet[3] < 120 || packet[3] > 140) {
@@ -374,7 +374,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     printf("Init DualSense\n");
 
                     init_feature();
-                    // 初始化手柄状态
+                    // Initialize controller state
                     uint8_t report32[142];
                     report32[0] = 0x32;
                     report32[1] = 0x10; // reportSeqCounter
@@ -471,7 +471,7 @@ void bt_write(uint8_t *data, uint16_t len) {
     fill_output_report_checksum(packet.data() + 1, len);
 
     critical_section_enter_blocking(&queue_lock);
-    send_queue.push(move(packet)); // 使用 move 避免深拷贝
+    send_queue.push(move(packet)); // Use move to avoid a deep copy
     critical_section_exit(&queue_lock);
 
     if (hid_interrupt_cid == 0) {
@@ -484,7 +484,7 @@ void bt_write(uint8_t *data, uint16_t len) {
 }
 
 vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
-    // 若为0x81则会请求新内容，其他若有旧数据则不进行请求
+    // 0x81 requests fresh content; for others, skip the request if cached data exists
     auto ret = vector<uint8_t>{};
     if (feature_data.contains(reportId)) {
         ret = feature_data[reportId];

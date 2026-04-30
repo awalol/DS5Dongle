@@ -1,33 +1,33 @@
 # Pico2W DualSense 5 Bridge
 [English](./README.EN.md)
-> 将 Pico2W 变成 DS5 手柄的无线适配器
+> Turn a Pico2W into a wireless adapter for the DS5 controller
 
-# 功能特点
- - 支持HD震动
+# Features
+ - Supports HD haptics
 
-# 使用方法
-1. 按住 Pico 上的BOOTSEL进入刷机
-2. 将 .uf2 文件拖入进去
-3. 将 DS5 手柄进入蓝牙配对模式
+# Usage
+1. Hold BOOTSEL on the Pico to enter flashing mode
+2. Drag the .uf2 file onto it
+3. Put the DS5 controller into Bluetooth pairing mode
 4. Enjoy it
 
-- 调整麦克风音量为改变震动增益倍数，范围 [1,2]
-- 开启扬声器静音为关闭LED连接提示 (手柄重连后生效)
-- 开启麦克风静音为禁用静默断连
-- 手柄连接到pico以后，系统才会显示设备
+- Adjust microphone volume to change the haptic gain multiplier, range [1, 2]
+- Enable speaker mute to disable the LED connection indicator (takes effect after the controller reconnects)
+- Enable microphone mute to disable silent disconnection
+- The system will only show the device after the controller has connected to the Pico
 
-# 当前问题:
-- 声音可能有点小卡顿
-- 由于编码需要，需要对pico进行超频，当前的参数是1.2V 320MHz。
-- 若您的pico使用该超频参数无法启动，请自行增加电压或者降低频率
+# Known Issues:
+- Audio may have slight stuttering
+- Due to encoding requirements, the Pico must be overclocked. Current settings are 1.2V at 320 MHz.
+- If your Pico will not boot at these overclock settings, increase the voltage or lower the frequency
 
-# 未来计划
+# Roadmap
 
-# 编译
-需要将pico sdk里面的tinyusb版本升级到最新
+# Build
+The TinyUSB version inside the Pico SDK must be upgraded to the latest.
 
-# 致谢
- - [rafaelvaloto/Pico_W-Dualsense](https://github.com/rafaelvaloto/Pico_W-Dualsense) - 灵感来源
- - [egormanga/SAxense](https://github.com/egormanga/SAxense) - 震动报文
- - [https://controllers.fandom.com/wiki/Sony_DualSense](https://controllers.fandom.com/wiki/Sony_DualSense) - 数据报文结构
- - [Paliverse/DualSenseX](https://github.com/Paliverse/DualSenseX) - 扬声器数据包报文
+# Acknowledgements
+ - [rafaelvaloto/Pico_W-Dualsense](https://github.com/rafaelvaloto/Pico_W-Dualsense) - Inspiration
+ - [egormanga/SAxense](https://github.com/egormanga/SAxense) - Haptic packets
+ - [https://controllers.fandom.com/wiki/Sony_DualSense](https://controllers.fandom.com/wiki/Sony_DualSense) - Data packet structure
+ - [Paliverse/DualSenseX](https://github.com/Paliverse/DualSenseX) - Speaker data packets

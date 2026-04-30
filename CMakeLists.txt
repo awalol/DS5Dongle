@@ -72,7 +72,7 @@ target_compile_definitions(ds5-bridge PRIVATE
 option(ENABLE_DSE "Enable DSE" OFF)
 if(ENABLE_DSE)
     target_compile_definitions(ds5-bridge PRIVATE
-            ENABLE_DSE # 将PID和产品名称设置为DSE
+            ENABLE_DSE # Set PID and product name to DSE
     )
 endif()
 

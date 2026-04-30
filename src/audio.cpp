@@ -44,8 +44,8 @@ void set_headset(bool state) {
     plug_headset = state;
 }
 
-// 有一个重构的想法，就是也把haptics也放进队列里面，使用定时器来发送数据
-// 定时器伪代码:
+// Refactor idea: also push haptics into the queue and use a timer to send data.
+// Timer pseudocode:
 // static uint8_t haptics_buf[64];
 // static uint8_t speaker_buf[200];
 // static auto last = time_us32();
@@ -53,13 +53,13 @@ void set_headset(bool state) {
 // if(now - last < 10666) return;
 // func: send haptics and speaker;
 // try_queue_remove - haptics and speaker
-// 缺点是可能会导致haptics有延迟，不够实时？
+// Downside: this could add latency to haptics and make them less real-time.
 void audio_loop() {
-    // 1. 读取 USB 音频数据
+    // 1. Read USB audio data
     if (!tud_audio_available()) return;
 
     int16_t raw[192];
-    uint32_t bytes_read = tud_audio_read(raw, sizeof(raw)); // 每次读入 384 bytes
+    uint32_t bytes_read = tud_audio_read(raw, sizeof(raw)); // reads 384 bytes per call
     int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
     if (frames == 0) {
         return;
@@ -67,7 +67,7 @@ void audio_loop() {
 
     static float audio_buf[512 * 2];
     static uint audio_buf_pos = 0;
-    // 2. 从4ch中提取ch3/ch4，转换为float输入重采样器
+    // 2. Extract ch3/ch4 from the 4 channels, convert to float, and feed the resampler
     WDL_ResampleSample *in_buf;
     int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
 
@@ -90,18 +90,18 @@ void audio_loop() {
         in_buf[i * 2 + 1] = (WDL_ResampleSample) raw[i * INPUT_CHANNELS + 3] / 32768.0f;
     }
 
-    // 3. 48kHz -> 3kHz 重采样
-    WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32帧 × 2ch
+    // 3. 48kHz -> 3kHz resample
+    WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32 frames x 2ch
     int out_frames = resampler.ResampleOut(out_buf, nframes, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
 
     static int8_t haptic_buf[SAMPLE_SIZE];
     static int haptic_buf_pos = 0;
 
-    // 4. 转换为int8并缓冲，满64字节即组包发送
+    // 4. Convert to int8 and buffer; once 64 bytes are filled, assemble and send the packet
     for (int i = 0; i < out_frames; i++) {
         int val_l = (int) (out_buf[i * 2] * 127.0f * max(volume[1],1.0f));
         int val_r = (int) (out_buf[i * 2 + 1] * 127.0f * max(volume[1],1.0f));
-        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127); // 似乎clamp有点多余？还是以防万一吧
+        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127); // clamp seems a bit redundant, but keep it just in case
         haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
 
         if (haptic_buf_pos != SAMPLE_SIZE) {
@@ -171,7 +171,7 @@ void core1_entry() {
     while (true) {
         audio_raw_element audio_element{};
         queue_remove_blocking(&audio_fifo,&audio_element);
-        // 将 512 frames 重采样成 480 frames 以解决噪音问题。感谢 @Junhoo
+        // Resample 512 frames down to 480 frames to fix noise issues. Thanks to @Junhoo
         WDL_ResampleSample *in_buf;
         int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
         for (int i = 0; i < nframes * 2;i++) {
