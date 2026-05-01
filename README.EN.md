@@ -15,6 +15,7 @@ This project enables the Raspberry Pi Pico2W to function as a Bluetooth bridge f
 - 📡 Wireless Bluetooth bridging
 - ⚙️ Adjustable haptic gain via microphone volume
 - 🔕 Configurable LED and disconnection behaviors
+- Support microphone, but performance optimization is not good, temporarily not planned to merge into the main branch
 
 ## Getting Started
 
