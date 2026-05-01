@@ -111,8 +111,8 @@
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX      2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX              16
 
-// Microphone (IN/TX) path: 2-channel, 16-bit
-#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX              2
+// Microphone (IN/TX) path: 1-channel, 16-bit
+#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX              1
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX      2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_TX              16
 

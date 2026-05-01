@@ -140,8 +140,8 @@ uint8_t const descriptor_configuration[] = {
     0x04, // bTerminalID: 4
     0x02, 0x04, // wTerminalType: Headset (0x0402)
     0x03, // bAssocTerminal: 3 (paired with speaker)
-    0x02, // bNrChannels: 2
-    0x03, 0x00, // wChannelConfig: L/R Front (0x0003)
+    0x01, // bNrChannels: 1
+    0x00, 0x00, // wChannelConfig: non-predefined mono
     0x00, // iChannelNames: 0
     0x00, // iTerminal: 0
 
@@ -255,12 +255,12 @@ uint8_t const descriptor_configuration[] = {
     0x01, // bDelay: 1 frame
     0x01, 0x00, // wFormatTag: PCM (0x0001)
 
-    // Format Type Descriptor (2-channel, 16-bit, 48kHz)
+    // Format Type Descriptor (1-channel, 16-bit, 48kHz)
     0x0B, // bLength: 11
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: FORMAT_TYPE
     0x01, // bFormatType: TYPE_I
-    0x02, // bNrChannels: 2
+    0x01, // bNrChannels: 1
     0x02, // bSubframeSize: 2
     0x10, // bBitResolution: 16
     0x01, // bSamFreqType: 1
@@ -271,7 +271,7 @@ uint8_t const descriptor_configuration[] = {
     0x05, // bDescriptorType (ENDPOINT)
     0x82, // bEndpointAddress: IN EP2
     0x05, // bmAttributes: Isochronous, Asynchronous
-    0xC4, 0x00, // wMaxPacketSize: 196 bytes
+    0x62, 0x00, // wMaxPacketSize: 98 bytes
     0x01, // bInterval: 1
     0x00, // bRefresh
     0x00, // bSynchAddress

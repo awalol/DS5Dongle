@@ -22,7 +22,7 @@
 #define REPORT_ID         0x36
 // #define VOLUME_GAIN       2
 #define BUFFER_LENGTH     48
-#define MIC_CHANNELS      2
+#define MIC_CHANNELS      1
 #define MIC_FRAMES        480
 #define MIC_OPUS_SIZE     71
 
@@ -237,7 +237,7 @@ void core1_entry() {
     resampler_audio.SetMode(true,0,false);
     resampler_audio.SetRates(51200,48000);
     resampler_audio.SetFeedMode(true);
-    decoder = opus_decoder_create(48000,2,&error);
+    decoder = opus_decoder_create(48000,MIC_CHANNELS,&error);
     if (error != 0) {
         printf("[Audio] OpusDecoder create failed\n");
     }
