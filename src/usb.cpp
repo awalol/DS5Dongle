@@ -4,6 +4,8 @@
 
 #include "tusb.h"
 #include "bsp/board_api.h"
+#include "bt.h"
+#include "pico/cyw43_arch.h"
 
 uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
 float volume[2] = {1.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
@@ -51,6 +53,11 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
                         TU_VERIFY(p_request->wLength == 1);
 
                         mute[index] = pBuff[0];
+                        if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
+                            bool led_on = !pBuff[0];
+                            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_on);
+                            bt_update_controller_led(led_on);
+                        }
 
                         TU_LOG2("    Set Mute: %d of entity: %u\r\n", mute[index], entityID);
                         return true;
