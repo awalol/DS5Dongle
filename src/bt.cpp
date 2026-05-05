@@ -480,7 +480,14 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     if (feature_data.contains(reportId)) {
         ret = feature_data[reportId];
     }
-    if (!feature_data.contains(reportId) || reportId == 0x81) {
+    if (!feature_data.contains(reportId) ||
+        // Get Test Command Result
+        reportId == 0x81 ||
+        // DSE: Set Profile Save?
+        reportId == 0x63 ||
+        reportId == 0x65 ||
+        reportId == 0x64
+        ) {
         if (hid_control_cid != 0) {
             uint8_t get_feature[] = {0x43, reportId};
             l2cap_send(hid_control_cid, get_feature, sizeof(get_feature));
