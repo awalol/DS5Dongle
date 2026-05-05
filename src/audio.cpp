@@ -20,7 +20,7 @@
 #define REPORT_SIZE       398
 #define REPORT_ID         0x36
 // #define VOLUME_GAIN       2
-#define BUFFER_LENGTH     48
+// #define BUFFER_LENGTH     48
 
 using std::clamp;
 using std::max;
@@ -113,11 +113,12 @@ void audio_loop() {
         pkt[2] = 0x11 | (1 << 7);
         pkt[3] = 7;
         pkt[4] = 0b11111110;
-        pkt[5] = BUFFER_LENGTH;
-        pkt[6] = BUFFER_LENGTH;
-        pkt[7] = BUFFER_LENGTH;
-        pkt[8] = BUFFER_LENGTH;
-        pkt[9] = BUFFER_LENGTH; // buffer length
+        const auto buf_len = get_config().haptics_buffer_length;
+        pkt[5] = buf_len;
+        pkt[6] = buf_len;
+        pkt[7] = buf_len;
+        pkt[8] = buf_len;
+        pkt[9] = buf_len; // buffer length
         pkt[10] = packetCounter++;
         pkt[11] = 0x12 | (1 << 7);
         pkt[12] = SAMPLE_SIZE;
