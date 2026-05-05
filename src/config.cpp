@@ -53,6 +53,10 @@ void config_valid() {
         body->speaker_volume = 2.0f;
         printf("[Config] Speaker Volume is invalid\n");
     }
+    if (body->inactive_time < 10 || body->inactive_time > 60) {
+        body->inactive_time = 30;
+        printf("[Config] Inactive time is invalid\n");
+    }
     if (body->disable_inactive_disconnect > 1) {
         body->disable_inactive_disconnect = 0;
         printf("[Config] disable_auto_disconnect is invalid\n");

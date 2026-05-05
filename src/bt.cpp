@@ -37,7 +37,7 @@ static bt_data_callback_t bt_data_callback = nullptr;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
 static queue<vector<uint8_t> > send_queue;
 static critical_section_t queue_lock;
-uint32_t inactive_time = 0; // 手柄长时间静默
+absolute_time_t inactive_time = 0; // 手柄长时间静默
 
 void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
@@ -321,10 +321,10 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 return;
             }
             if (packet[3] < 120 || packet[3] > 140) {
-                inactive_time = time_us_32();
-            }else if (time_us_32() - inactive_time > 1800 * 1000 * 1000){
+                inactive_time = get_absolute_time();
+            } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) > get_config().inactive_time * 60 * 1000 * 1000) {
                 printf("disconnect when inactive\n");
-                inactive_time = time_us_32();
+                inactive_time = get_absolute_time();
                 bt_disconnect();
             }
         } else if (channel == hid_control_cid) {
@@ -360,7 +360,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     if (!get_config().disable_pico_led) {
                         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
                     }
-                    inactive_time = time_us_32();
+                    inactive_time = get_absolute_time();
 
                     printf("Init DualSense\n");
 
@@ -490,16 +490,16 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     return ret;
 }
 
-void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len) {
+void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
     if (hid_control_cid != 0) {
         uint8_t get_feature[len + 2];
         get_feature[0] = 0x53;
         get_feature[1] = reportId;
-        memcpy(get_feature + 2,data,len);
-        fill_feature_report_checksum(get_feature + 1,len + 1);
+        memcpy(get_feature + 2, data, len);
+        fill_feature_report_checksum(get_feature + 1, len + 1);
         l2cap_send(hid_control_cid, get_feature, len + 2);
         printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
-        printf_hexdump(get_feature,len + 2);
+        printf_hexdump(get_feature, len + 2);
     }
 }
 

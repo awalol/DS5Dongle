@@ -10,11 +10,12 @@
 struct __attribute__((packed)) Config_body {
     float haptics_gain; // [1.0,2.0]
     float speaker_volume; // [1.0,2.0]
+    uint8_t inactive_time; // [10,60] min
     uint8_t disable_inactive_disconnect; // bool: 0 disable,1 enable
     uint8_t disable_pico_led; // bool
     uint8_t polling_rate_mode; // 0: 250Hz,1: 500Hz,2: instant
     uint8_t haptics_buffer_length; // [16,255]
-    uint8_t controller_mode; // 0: DS5, 1: DSE
+    uint8_t controller_mode; // 0: DS5, 1: DSE 自动切换识别太麻烦了，懒的做了，期待pr
 };
 
 struct __attribute__((packed)) Config {
