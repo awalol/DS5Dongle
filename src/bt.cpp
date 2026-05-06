@@ -13,9 +13,9 @@
 #include "pico/cyw43_arch.h"
 #include "utils.h"
 #include "bsp/board_api.h"
-#include "pico/sync.h"
 #include "classic/sdp_server.h"
 #include "config.h"
+#include "pico/util/queue.h"
 
 #define MTU 672
 
@@ -35,8 +35,12 @@ static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
-static queue<vector<uint8_t> > send_queue;
-static critical_section_t queue_lock;
+queue_t send_fifo;
+struct send_element {
+    uint8_t data[512];
+    size_t len;
+};
+
 absolute_time_t inactive_time = 0; // 手柄长时间静默
 
 void bt_register_data_callback(bt_data_callback_t callback) {
@@ -77,7 +81,7 @@ void bt_l2cap_init() {
 }
 
 int bt_init() {
-    critical_section_init(&queue_lock);
+    queue_init(&send_fifo, sizeof(send_element), 2);
 
     bt_l2cap_init();
 
@@ -322,7 +326,8 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             }
             if (packet[3] < 120 || packet[3] > 140) {
                 inactive_time = get_absolute_time();
-            } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) > get_config().inactive_time * 60 * 1000 * 1000) {
+            } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) > get_config().inactive_time * 60 *
+                       1000 * 1000) {
                 printf("disconnect when inactive\n");
                 inactive_time = get_absolute_time();
                 bt_disconnect();
@@ -435,20 +440,16 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
         case L2CAP_EVENT_CAN_SEND_NOW: {
             // printf("[L2CAP] L2CAP_EVENT_CAN_SEND_NOW\n");
 
-            critical_section_enter_blocking(&queue_lock);
-            if (send_queue.empty()) {
-                critical_section_exit(&queue_lock);
-                break;
+            static send_element send_packet{};
+            if (queue_try_remove(&send_fifo, &send_packet)) {
+                const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
+                if (status != 0) {
+                    printf("[L2CAP] L2CAP Send Error, Status: 0x%02X\n", status);
+                }
             }
-            vector<uint8_t> data = send_queue.front();
-            send_queue.pop();
-            critical_section_exit(&queue_lock);
-
-            uint8_t status = l2cap_send(hid_interrupt_cid, data.data(), data.size());
-            if (status != 0) {
-                printf("[L2CAP] Interrupt Error, Status: 0x%02X\n", status);
+            if (!queue_is_empty(&send_fifo)) {
+                l2cap_request_can_send_now_event(hid_interrupt_cid);
             }
-            l2cap_request_can_send_now_event(hid_interrupt_cid);
             break;
         }
     }
@@ -456,20 +457,18 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
 void bt_write(uint8_t *data, uint16_t len) {
     if (hid_interrupt_cid == 0) return;
-    vector<uint8_t> packet(len + 1);
-    packet[0] = 0xA2;
-    memcpy(packet.data() + 1, data, len);
-    fill_output_report_checksum(packet.data() + 1, len);
+    static send_element packet{};
+    memset(packet.data, 0, 512);
+    packet.len = len + 1;
+    packet.data[0] = 0xA2;
+    memcpy(packet.data + 1, data, len);
+    fill_output_report_checksum(packet.data + 1, len);
 
-    critical_section_enter_blocking(&queue_lock);
-    send_queue.push(move(packet)); // 使用 move 避免深拷贝
-    critical_section_exit(&queue_lock);
-
-    if (hid_interrupt_cid == 0) {
-        printf("[L2CAP bt_write] Warning: hid_interrupt_cid 0");
+    if (!queue_try_add(&send_fifo, &packet)) {
+        printf("[L2CAP bt_write] Error: Failed to add packet to send FIFO\n");
         return;
     }
-    if (send_queue.size() == 1) {
+    if (queue_get_level(&send_fifo) == 1) {
         l2cap_request_can_send_now_event(hid_interrupt_cid);
     }
 }
@@ -487,7 +486,7 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
         reportId == 0x63 ||
         reportId == 0x65 ||
         reportId == 0x64
-        ) {
+    ) {
         if (hid_control_cid != 0) {
             uint8_t get_feature[] = {0x43, reportId};
             l2cap_send(hid_control_cid, get_feature, sizeof(get_feature));
