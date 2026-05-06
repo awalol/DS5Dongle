@@ -299,6 +299,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hid_control_cid = 0;
             hid_interrupt_cid = 0;
             feature_data.clear();
+            critical_section_enter_blocking(&queue_lock);
+            while (!send_queue.empty()) send_queue.pop();
+            critical_section_exit(&queue_lock);
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
             printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
             gap_inquiry_start(30);
