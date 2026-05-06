@@ -5,8 +5,14 @@
 #include "tusb.h"
 #include "bsp/board_api.h"
 
+#include "bt.h"
+#include "usb.h"
+
 uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
 float volume[2] = {1.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
+
+static volatile bool s_usb_suspended = false;
+static volatile bool s_disconnect_requested = false;
 
 #define UAC1_ENTITY_SPK_FEATURE_UNIT    0x02
 #define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05
@@ -161,4 +167,28 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
     (void) instance;
     (void) len;
+}
+
+extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
+    (void) remote_wakeup_en;
+
+    // TinyUSB callbacks can run in IRQ context. Defer BTstack calls to main loop.
+    s_usb_suspended = true;
+    s_disconnect_requested = true;
+}
+
+extern "C" void tud_resume_cb(void) {
+    s_usb_suspended = false;
+}
+
+void usb_pm_poll() {
+    if (!s_disconnect_requested) {
+        return;
+    }
+    s_disconnect_requested = false;
+
+    // Let the controller go idle when the host suspends.
+    if (s_usb_suspended) {
+        bt_disconnect();
+    }
 }

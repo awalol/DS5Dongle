@@ -13,6 +13,7 @@
 #include "pico/cyw43_arch.h"
 #include "utils.h"
 #include "bsp/board_api.h"
+#include "tusb.h"
 #include "classic/sdp_server.h"
 #include "config.h"
 #include "pico/util/queue.h"
@@ -305,7 +306,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             feature_data.clear();
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
             printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
-            gap_inquiry_start(30);
+            if (!tud_suspended()) {
+                gap_inquiry_start(30);
+            } else {
+                printf("[HCI] USB suspended, skip inquiry\n");
+            }
             break;
         }
     }
