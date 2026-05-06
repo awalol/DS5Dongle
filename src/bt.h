@@ -23,5 +23,6 @@ void bt_write(uint8_t* data,uint16_t len);
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
 void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len);
-
+void bt_update_controller_led(bool led_on);
+extern uint8_t mute[2];
 #endif //DS5_BRIDGE_BT_H
