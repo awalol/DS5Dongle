@@ -11,6 +11,7 @@
 #include "opus.h"
 #include "utils.h"
 #include "pico/multicore.h"
+#include "pico/time.h"
 #include "pico/util/queue.h"
 #include "config.h"
 
@@ -19,6 +20,8 @@
 #define SAMPLE_SIZE       64
 #define REPORT_SIZE       398
 #define REPORT_ID         0x36
+#define BT_WRITE_PERIOD_US 10666
+#define PENDING_HAPTIC_PKT_COUNT 2
 // #define VOLUME_GAIN       2
 // #define BUFFER_LENGTH     48
 
@@ -29,6 +32,11 @@ static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
 static bool plug_headset = false;
+static uint8_t pending_haptic_pkt[PENDING_HAPTIC_PKT_COUNT][REPORT_SIZE];
+static uint8_t pending_haptic_pkt_read_index = 0;
+static uint8_t pending_haptic_pkt_count = 0;
+static bool pending_haptic_pkt_primed = false;
+static uint64_t next_bt_write_us = 0;
 alignas(8) static uint32_t audio_core1_stack[8192];
 queue_t audio_fifo;
 static uint8_t opus_buf[200];
@@ -41,7 +49,52 @@ void set_headset(bool state) {
     plug_headset = state;
 }
 
+static uint8_t *reserve_haptic_pkt() {
+    if (pending_haptic_pkt_count == PENDING_HAPTIC_PKT_COUNT) {
+        pending_haptic_pkt_read_index = (pending_haptic_pkt_read_index + 1) % PENDING_HAPTIC_PKT_COUNT;
+        pending_haptic_pkt_count--;
+    }
+
+    const uint8_t write_index = (pending_haptic_pkt_read_index + pending_haptic_pkt_count) % PENDING_HAPTIC_PKT_COUNT;
+    pending_haptic_pkt_count++;
+    if (pending_haptic_pkt_count == PENDING_HAPTIC_PKT_COUNT) {
+        pending_haptic_pkt_primed = true;
+    }
+
+    return pending_haptic_pkt[write_index];
+}
+
+static void try_send_haptic_pkt() {
+    if (!pending_haptic_pkt_primed || pending_haptic_pkt_count == 0) {
+        return;
+    }
+
+    const uint64_t now_us = time_us_64();
+    if (next_bt_write_us == 0) {
+        next_bt_write_us = now_us;
+    }
+    if ((int64_t)(now_us - next_bt_write_us) < 0) {
+        return;
+    }
+
+    bt_write(pending_haptic_pkt[pending_haptic_pkt_read_index], REPORT_SIZE);
+    pending_haptic_pkt_read_index = (pending_haptic_pkt_read_index + 1) % PENDING_HAPTIC_PKT_COUNT;
+    pending_haptic_pkt_count--;
+    if (pending_haptic_pkt_count == 0) {
+        pending_haptic_pkt_primed = false;
+        next_bt_write_us = 0;
+        return;
+    }
+
+    next_bt_write_us += BT_WRITE_PERIOD_US;
+    if ((int64_t)(now_us - next_bt_write_us) >= 0) {
+        next_bt_write_us = now_us + BT_WRITE_PERIOD_US;
+    }
+}
+
 void audio_loop() {
+    try_send_haptic_pkt();
+
     // 1. 读取 USB 音频数据
     if (!tud_audio_available()) return;
 
@@ -94,7 +147,8 @@ void audio_loop() {
         if (haptic_buf_pos != SAMPLE_SIZE) {
             continue;
         }
-        uint8_t pkt[REPORT_SIZE]{};
+        uint8_t *pkt = reserve_haptic_pkt();
+        memset(pkt, 0, REPORT_SIZE);
         pkt[0] = REPORT_ID;
         pkt[1] = reportSeqCounter << 4;
         reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
@@ -117,7 +171,7 @@ void audio_loop() {
         memcpy(pkt + 79,opus_buf,200);
         critical_section_exit(&opus_cs);
 
-        bt_write(pkt, sizeof(pkt));
+        try_send_haptic_pkt();
         haptic_buf_pos = 0;
     }
 }
