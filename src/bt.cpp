@@ -333,8 +333,8 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             }
             if (packet[3] < 120 || packet[3] > 140) {
                 inactive_time = get_absolute_time();
-            } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) > get_config().inactive_time * 60 *
-                       1000 * 1000) {
+            } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) >
+                       static_cast<int64_t>(get_config().inactive_time) * 60 * 1000 * 1000) {
                 printf("disconnect when inactive\n");
                 inactive_time = get_absolute_time();
                 bt_disconnect();
@@ -348,7 +348,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 #if !ENABLE_SERIAL
                     tud_connect();
 #endif
-                }else if (packet[0] == 0x02) {
+                } else if (packet[0] == 0x02) {
                     printf("Connected DS5 Controller\n");
                     check_dse = false;
                     is_dse = false;
