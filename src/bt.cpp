@@ -509,7 +509,7 @@ void bt_write(const uint8_t *data, const uint16_t len, const bool priority) {
 
     if (priority) {
         if (!queue_try_add(&priority_send_fifo, &packet)) {
-            printf("[L2CAP bt_write] Error: Failed to add packet to send FIFO\n");
+            printf("[L2CAP bt_write] Error: Failed to add packet to priority send FIFO\n");
             return;
         }
     }else {
