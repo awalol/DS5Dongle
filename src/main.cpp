@@ -12,6 +12,7 @@
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
+#include "pico/cyw43_driver.h"
 #if ENABLE_SERIAL
 #include "pico/stdio_usb.h"
 #endif
@@ -20,6 +21,22 @@
 
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
+
+// CYW43 SPI target frequency in Hz (32MHz - keep constant across clock changes)
+// At 320MHz with CYW43_PIO_CLOCK_DIV_INT=5: 320MHz/(2*5) = 32MHz
+#define CYW43_SPI_HZ 32000000u
+
+static void set_clock_with_cyw43(uint32_t khz, enum vreg_voltage voltage) {
+    // Change CPU clock and recalculate CYW43 PIO divider to maintain SPI speed
+    vreg_set_voltage(voltage);
+    sleep_ms(2);
+    set_sys_clock_khz(khz, true);
+    // Recalculate divider: div = sys_clock_hz / (2 * CYW43_SPI_HZ)
+    uint32_t sys_hz = khz * 1000u;
+    uint32_t div_int = sys_hz / (2u * CYW43_SPI_HZ);
+    if (div_int < 1) div_int = 1;
+    cyw43_set_pio_clkdiv_int_frac8(div_int, 0);
+}
 
 int reportSeqCounter = 0;
 uint8_t packetCounter = 0;
@@ -243,5 +260,17 @@ int main() {
         tud_task();
         audio_loop();
         interrupt_loop();
+
+        // Dynamic clock: 320MHz when connected, 133MHz when idle
+        static bool last_connected = false;
+        const bool connected = bt_is_connected();
+        if (connected != last_connected) {
+            if (connected) {
+                set_clock_with_cyw43(320000, VREG_VOLTAGE_1_20);
+            } else {
+                set_clock_with_cyw43(133000, VREG_VOLTAGE_1_10);
+            }
+            last_connected = connected;
+        }
     }
 }

@@ -74,6 +74,10 @@ bool bt_disconnect() {
     return true;
 }
 
+bool bt_is_connected() {
+    return hid_interrupt_cid != 0;
+}
+
 void bt_l2cap_init() {
     l2cap_event_callback_registration.callback = &l2cap_packet_handler;
     l2cap_add_event_handler(&l2cap_event_callback_registration);
