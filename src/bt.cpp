@@ -16,6 +16,15 @@
 #include "classic/sdp_server.h"
 #include "config.h"
 #include "pico/util/queue.h"
+#include "gap.h"
+
+// Page scan intervals in units of 0.625ms
+// Default: 0x0800 (~1280ms interval) / 0x0012 (~11ms window)
+// Idle:    0x1000 (~2560ms interval) / 0x0012 (~11ms window) - half duty cycle
+#define PAGE_SCAN_INTERVAL_ACTIVE   0x0800
+#define PAGE_SCAN_WINDOW_ACTIVE     0x0012
+#define PAGE_SCAN_INTERVAL_IDLE     0x1000
+#define PAGE_SCAN_WINDOW_IDLE       0x0012
 
 #define MTU_CONTROL 256
 #define MTU_INTERRUPT 1691
@@ -76,6 +85,16 @@ bool bt_disconnect() {
 
 bool bt_is_connected() {
     return hid_interrupt_cid != 0;
+}
+
+void bt_set_scan_idle() {
+    gap_set_page_scan_activity(PAGE_SCAN_INTERVAL_IDLE, PAGE_SCAN_WINDOW_IDLE);
+    gap_inquiry_set_scan_activity(PAGE_SCAN_INTERVAL_IDLE, PAGE_SCAN_WINDOW_IDLE);
+}
+
+void bt_set_scan_active() {
+    gap_set_page_scan_activity(PAGE_SCAN_INTERVAL_ACTIVE, PAGE_SCAN_WINDOW_ACTIVE);
+    gap_inquiry_set_scan_activity(PAGE_SCAN_INTERVAL_ACTIVE, PAGE_SCAN_WINDOW_ACTIVE);
 }
 
 void bt_l2cap_init() {

@@ -267,8 +267,10 @@ int main() {
         if (connected != last_connected) {
             if (connected) {
                 set_clock_with_cyw43(320000, VREG_VOLTAGE_1_20);
+                bt_set_scan_active();
             } else {
                 set_clock_with_cyw43(133000, VREG_VOLTAGE_1_10);
+                bt_set_scan_idle();
             }
             last_connected = connected;
         }
