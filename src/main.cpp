@@ -18,6 +18,9 @@
 #endif
 #include "config.h"
 #include "cmd.h"
+#if ENABLE_BATT_LED
+#include "battery_led.h"
+#endif
 
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
@@ -102,6 +105,9 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
 
         if (get_config().polling_rate_mode != 2) {
             memcpy(interrupt_in_data, data + 3, 63);
+#if ENABLE_BATT_LED
+            battery_led_note_report();
+#endif
             return;
         }
 
@@ -115,6 +121,9 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
         memcpy(interrupt_in_data, data + 3, 63);
         report_dirty = true;
         critical_section_exit(&report_cs);
+#if ENABLE_BATT_LED
+        battery_led_note_report();
+#endif
     }
 }
 
@@ -221,6 +230,10 @@ int main() {
     }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
 
+#if ENABLE_BATT_LED
+    battery_led_init();
+#endif
+
 #if !ENABLE_SERIAL
     if (watchdog_caused_reboot()) {
         printf("Rebooted by Watchdog!\n");
@@ -260,8 +273,7 @@ int main() {
         tud_task();
         audio_loop();
         interrupt_loop();
-
-        // Dynamic clock: 320MHz when connected, 133MHz when idle
+// Dynamic clock: 320MHz when connected, 133MHz when idle
         static bool last_connected = false;
         const bool connected = bt_is_connected();
         if (connected != last_connected) {
@@ -274,5 +286,8 @@ int main() {
             }
             last_connected = connected;
         }
+#if ENABLE_BATT_LED
+        battery_led_tick();
+#endif
     }
 }

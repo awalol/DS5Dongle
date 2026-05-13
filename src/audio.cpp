@@ -118,6 +118,7 @@ void audio_loop() {
         pkt[11] = 0x12 | 0 << 6 | 1 << 7;
         pkt[12] = SAMPLE_SIZE;
         memcpy(pkt + 13, haptic_buf, SAMPLE_SIZE);
+#if !DISABLE_SPEAKER_PROC
         pkt[77] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7; // Speaker: 0x13
         // L Headset Mono: 0x14
         // L Headset R Speaker: 0x15
@@ -126,7 +127,7 @@ void audio_loop() {
         critical_section_enter_blocking(&opus_cs);
         memcpy(pkt + 79, opus_buf, 200);
         critical_section_exit(&opus_cs);
-
+#endif
         bt_write(pkt, sizeof(pkt), true);
         haptic_buf_pos = 0;
     }
@@ -137,9 +138,11 @@ void audio_init() {
     resampler.SetRates(48000, 3000);
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 24, 6);
+ #if !DISABLE_SPEAKER_PROC
     queue_init(&audio_fifo, sizeof(audio_raw_element), 2);
     critical_section_init(&opus_cs);
     multicore_launch_core1_with_stack(core1_entry, audio_core1_stack, sizeof(audio_core1_stack));
+#endif
 }
 
 static OpusEncoder *encoder;

@@ -94,6 +94,14 @@ jobs:
           cmake --build build/debug --target ds5-bridge
           cp build/debug/ds5-bridge.uf2 artifacts/ds5-bridge-debug.uf2
 
+      - name: Build no-batt-led firmware (compile check only)
+        run: |
+          cmake -S . -B build/no-batt-led -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DENABLE_BATT_LED=OFF
+          cmake --build build/no-batt-led --target ds5-bridge
+
       - name: Upload standard UF2 artifact
         uses: actions/upload-artifact@v7
         with:

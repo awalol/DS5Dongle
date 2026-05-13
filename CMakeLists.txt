@@ -23,8 +23,13 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif ()
 # ====================================================================================
-set(PICO_BOARD pico2_w CACHE STRING "Board type")
 
+if (PICO_W_BUILD)
+        set(PICO_BOARD pico_w CACHE STRING "Board type")
+        set(PICO_RP2350 OFF CACHE BOOL "Not using RP2350")
+else ()
+        set(PICO_BOARD pico2_w CACHE STRING "Board type")
+endif ()
 #set(PICO_CYW43_SUPPORTED 1)
 #set(PICO_CYW43_ARCH_THREADSAFE_BACKGROUND 1)
 
@@ -40,6 +45,31 @@ if(ENABLE_VERBOSE)
 else()
     set(ENABLE_VERBOSE_VALUE 0)
 endif ()
+option(ENABLE_BATT_LED "Blink Pico LED when DualSense battery is low (<=10%)" ON)
+if (ENABLE_BATT_LED)
+        set(ENABLE_BATT_LED_VALUE 1)
+else ()
+        set(ENABLE_BATT_LED_VALUE 0)
+endif ()
+option(DISABLE_SPEAKER_PROC "Disable Speaker in controller" OFF)
+if (DISABLE_SPEAKER_PROC)
+        set(DISABLE_SPEAKER_PROC_VALUE 1)
+else ()
+        set(DISABLE_SPEAKER_PROC_VALUE 0)
+endif ()
+option(PICO_W_BUILD "Build for Rasberry Pi Pico W, audio is missing" OFF)
+if (PICO_W_BUILD)
+        set(PICO_W_BUILD_VALUE 1)
+        set(CYW43_PIO_CLOCK_DIV_VALUE 3)
+        set(SYS_CLOCK_KHZ_VALUE 200000)
+        set(DISABLE_SPEAKER_PROC_VALUE 1)
+else ()
+        set(PICO_W_BUILD_VALUE 0)
+        set(CYW43_PIO_CLOCK_DIV_VALUE 5)
+        set(SYS_CLOCK_KHZ_VALUE 320000)
+endif ()
+
+
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
@@ -60,6 +90,10 @@ add_executable(ds5-bridge
         src/config.cpp
         src/cmd.cpp
 )
+
+if (ENABLE_BATT_LED)
+        target_sources(ds5-bridge PRIVATE src/battery_led.cpp)
+endif ()
 
 # Cockos WDLResampler
 add_library(wdl_resampler STATIC
@@ -83,13 +117,34 @@ target_compile_definitions(ds5-bridge PRIVATE
         ENABLE_SERIAL=${ENABLE_SERIAL_VALUE}
         PICO_FLASH_ASSUME_CORE1_SAFE=1
         WDL_RESAMPLE_TYPE=float
-        CYW43_PIO_CLOCK_DIV_INT=5
+        CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
         CYW43_PIO_CLOCK_DIV_DYNAMIC=1
         PICO_STDIO_USB_USE_DEFAULT_DESCRIPTORS=0
         PICO_STDIO_USB_ENABLE_RESET_VIA_BAUD_RATE=0
         PICO_STDIO_USB_ENABLE_RESET_VIA_VENDOR_INTERFACE=0
         ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
+        ENABLE_BATT_LED=${ENABLE_BATT_LED_VALUE}
+        PICO_W_BUILD=${PICO_W_BUILD_VALUE}
+        SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
+        DISABLE_SPEAKER_PROC=${DISABLE_SPEAKER_PROC_VALUE}
 )
+
+option(ENABLE_WAKE_HID "Wake the Windows host on PS-button press" OFF)
+if(ENABLE_WAKE_HID)
+    target_compile_definitions(ds5-bridge PRIVATE
+            ENABLE_WAKE_HID
+    )
+    target_sources(ds5-bridge PRIVATE
+            src/wake.cpp
+    )
+endif()
+
+option(WAKE_DEBUG "Print wake-FSM transitions to UART (developer use)" OFF)
+if(WAKE_DEBUG)
+    target_compile_definitions(ds5-bridge PRIVATE
+            WAKE_DEBUG
+    )
+endif()
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
 pico_set_program_version(ds5-bridge "0.5.3")

@@ -26,8 +26,8 @@
 #define PAGE_SCAN_INTERVAL_IDLE     0x1000
 #define PAGE_SCAN_WINDOW_IDLE       0x0012
 
-#define MTU_CONTROL 256
-#define MTU_INTERRUPT 1691
+#define MTU_CONTROL 672
+#define MTU_INTERRUPT 672
 
 using std::unordered_map;
 using std::vector;
@@ -418,6 +418,9 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 if (psm == PSM_HID_CONTROL) {
                     printf("[L2CAP] HID Control opened cid=0x%04X\n", local_cid);
                     hid_control_cid = local_cid;
+
+                    const auto mtu = l2cap_get_remote_mtu_for_local_cid(hid_control_cid);
+                    printf("[L2CAP] Remote Control MTU: %d\n",mtu);
                 } else if (psm == PSM_HID_INTERRUPT) {
                     printf("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
                     hid_interrupt_cid = local_cid;
@@ -451,6 +454,9 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     };
                     memcpy(report32 + 2, packet_0x10, sizeof(packet_0x10));
                     bt_write(report32, sizeof(report32));
+
+                    const auto mtu = l2cap_get_remote_mtu_for_local_cid(hid_interrupt_cid);
+                    printf("[L2CAP] Remote Interrupt MTU: %d\n",mtu);
 
                     // tud_connect();
                 } else {
