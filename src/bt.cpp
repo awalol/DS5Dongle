@@ -13,12 +13,21 @@
 #include "pico/cyw43_arch.h"
 #include "utils.h"
 #include "bsp/board_api.h"
+#include "oled.h"
+#include "pico/sync.h"
 #include "classic/sdp_server.h"
 #include "config.h"
 #include "pico/util/queue.h"
+#include "hci.h"
+#include "hardware/flash.h"
+#include "hardware/sync.h"
+#include "pico/multicore.h"
 
 #define MTU_CONTROL 256
 #define MTU_INTERRUPT 1691
+
+// Safe flash offset: 128KB from the end of the flash to avoid BTstack conflict.
+#define FLASH_TARGET_OFFSET (PICO_FLASH_SIZE_BYTES - 128 * 1024)
 
 using std::unordered_map;
 using std::vector;
@@ -33,11 +42,13 @@ static bd_addr_t current_device_addr;
 static bool device_found = false;
 static bool new_pair = false; // 只有新匹配的设备才用创建channel，自动重连走的是service
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
+
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
 static bool check_dse = false;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
+
 queue_t send_fifo;
 
 struct send_element {
@@ -46,6 +57,169 @@ struct send_element {
 };
 
 absolute_time_t inactive_time = 0; // 手柄长时间静默
+static critical_section_t queue_lock;
+
+int current_slot = 0;
+static bd_addr_t slot_addrs[4];
+static bool slot_occupied[4] = {false, false, false, false};
+
+static bool want_disconnect = false;
+static bool want_inquiry = false;
+static int pending_slot = -1;
+
+// Magic word to ensure flash isn't garbage
+#define FLASH_MAGIC 0x44533501
+
+struct FlashData {
+    uint32_t magic;
+    bd_addr_t addrs[4];
+    bool occupied[4];
+};
+
+void save_slots_to_flash() {
+    uint8_t buffer[FLASH_PAGE_SIZE] = {0};
+    FlashData* data = (FlashData*)buffer;
+    data->magic = FLASH_MAGIC;
+    memcpy(data->addrs, slot_addrs, sizeof(slot_addrs));
+    memcpy(data->occupied, slot_occupied, sizeof(slot_occupied));
+
+    multicore_lockout_start_blocking();
+    uint32_t ints = save_and_disable_interrupts();
+    flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SECTOR_SIZE);
+    flash_range_program(FLASH_TARGET_OFFSET, buffer, FLASH_PAGE_SIZE);
+    restore_interrupts(ints);
+    multicore_lockout_end_blocking();
+    printf("[Slot] Saved mapping to Flash Memory\n");
+}
+
+void load_slots_from_nvm() {
+    const FlashData* flash_data = (const FlashData*) (XIP_BASE + FLASH_TARGET_OFFSET);
+    
+    if (flash_data->magic == FLASH_MAGIC) {
+        memcpy(slot_addrs, flash_data->addrs, sizeof(slot_addrs));
+        memcpy(slot_occupied, flash_data->occupied, sizeof(slot_occupied));
+        
+        for (int i = 0; i < 4; i++) {
+            if (slot_occupied[i]) {
+                printf("[Slot] Loaded Flash MAC %s into Slot %d\n", bd_addr_to_str(slot_addrs[i]), i + 1);
+            }
+        }
+    } else {
+        printf("[Slot] Flash empty or invalid magic. Initializing to empty slots.\n");
+        for (int i = 0; i < 4; i++) {
+            slot_occupied[i] = false;
+            memset(slot_addrs[i], 0, 6);
+        }
+        save_slots_to_flash();
+    }
+}
+
+bool bt_disconnect() {
+    if (acl_handle == HCI_CON_HANDLE_INVALID) {
+        return false;
+    }
+
+    want_disconnect = true;
+    return true;
+}
+
+void bt_update() {
+    if (want_disconnect && acl_handle != HCI_CON_HANDLE_INVALID) {
+        if (hci_can_send_command_packet_now()) {
+            gap_disconnect(acl_handle);
+            want_disconnect = false;
+        }
+    } else {
+        want_disconnect = false;
+    }
+
+    if (want_inquiry && acl_handle == HCI_CON_HANDLE_INVALID) {
+        if (hci_can_send_command_packet_now()) {
+            if (!slot_occupied[current_slot]) {
+                oled_set_status("Scanning...");
+                gap_inquiry_start(30);
+            } else {
+                oled_set_status("Waiting...");
+                gap_inquiry_stop(); // Ensure radio is listening, not scanning
+            }
+            want_inquiry = false;
+        }
+    }
+}
+
+void bt_set_slot(int slot) {
+    if (slot < 0 || slot > 3) return;
+    if (current_slot == slot) return;
+    
+    printf("[Slot] Switching to Slot %d\n", slot + 1);
+    current_slot = slot;
+    
+    if (acl_handle != HCI_CON_HANDLE_INVALID) {
+        bt_disconnect();
+    } else {
+        want_inquiry = true;
+    }
+}
+
+int bt_get_slot() {
+    return current_slot;
+}
+
+void bt_forget_current_slot() {
+    if (slot_occupied[current_slot]) {
+        gap_drop_link_key_for_bd_addr(slot_addrs[current_slot]);
+        printf("[Slot] Forgot MAC %s for Slot %d\n", bd_addr_to_str(slot_addrs[current_slot]), current_slot + 1);
+        
+        slot_occupied[current_slot] = false;
+        memset(slot_addrs[current_slot], 0, 6);
+        save_slots_to_flash();
+
+        if (acl_handle != HCI_CON_HANDLE_INVALID) {
+            bt_disconnect();
+        } else {
+            want_inquiry = true;
+        }
+    }
+}
+
+void bt_clear_all_slots() {
+    printf("[Slot] Factory Reset: Clearing ALL slots and pairing data!\n");
+    
+    btstack_link_key_iterator_t it;
+    if (gap_link_key_iterator_init(&it)) {
+        bd_addr_t addr;
+        link_key_t link_key;
+        link_key_type_t type;
+        
+        bd_addr_t to_delete[10];
+        int delete_count = 0;
+        
+        while (gap_link_key_iterator_get_next(&it, addr, link_key, &type)) {
+            if (delete_count < 10) {
+                bd_addr_copy(to_delete[delete_count], addr);
+                delete_count++;
+            }
+        }
+        gap_link_key_iterator_done(&it);
+
+        for (int i = 0; i < delete_count; i++) {
+            gap_drop_link_key_for_bd_addr(to_delete[i]);
+            printf("[Slot] Dropped MAC %s\n", bd_addr_to_str(to_delete[i]));
+        }
+    }
+    
+    for (int i = 0; i < 4; i++) {
+        slot_occupied[i] = false;
+        memset(slot_addrs[i], 0, 6);
+    }
+    save_slots_to_flash();
+    
+    if (acl_handle != HCI_CON_HANDLE_INVALID) {
+        bt_disconnect();
+    } else {
+        want_inquiry = true;
+    }
+}
 
 void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
@@ -61,16 +235,6 @@ void bt_send_control(uint8_t *data, uint16_t len) {
     if (hid_control_cid != 0) {
         l2cap_send(hid_control_cid, data, len);
     }
-}
-
-bool bt_disconnect() {
-    if (acl_handle == HCI_CON_HANDLE_INVALID) {
-        return false;
-    }
-
-    // 0x13 = remote user terminated connection
-    hci_send_cmd(&hci_disconnect, acl_handle, 0x13);
-    return true;
 }
 
 void bt_l2cap_init() {
@@ -102,6 +266,10 @@ int bt_init() {
     hci_add_event_handler(&hci_event_callback_registration);
 
     hci_power_control(HCI_POWER_ON);
+    
+    // Load slots from flash memory into RAM
+    load_slots_from_nvm();
+    
     return 0;
 }
 
@@ -131,6 +299,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             printf("[BT] State: %u\n", state);
             if (state == HCI_STATE_WORKING) {
                 printf("[BT] Stack ready, start inquiry\n");
+                oled_set_status("Scanning...");
                 gap_inquiry_start(30);
             }
             break;
@@ -154,10 +323,31 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 
             // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
             if ((cod & 0x000F00) == 0x000500) {
-                printf("[HCI] Gamepad found: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int) cod);
-                bd_addr_copy(current_device_addr, addr);
-                device_found = true;
-                gap_inquiry_stop();
+                // Profile Enforcement: Check if this gamepad is allowed in the current slot
+                bool allowed = false;
+                if (!slot_occupied[current_slot]) {
+                    // Current slot is empty. Ensure the gamepad is not owned by another slot.
+                    bool owned_by_other = false;
+                    for(int i=0; i<4; i++) {
+                        if(slot_occupied[i] && memcmp(addr, slot_addrs[i], 6) == 0) {
+                            owned_by_other = true; 
+                            break;
+                        }
+                    }
+                    if (!owned_by_other) allowed = true;
+                } else if (memcmp(addr, slot_addrs[current_slot], 6) == 0) {
+                    // Current slot is occupied and the gamepad matches
+                    allowed = true;
+                }
+
+                if (allowed) {
+                    printf("[HCI] Gamepad found and allowed: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int) cod);
+                    bd_addr_copy(current_device_addr, addr);
+                    device_found = true;
+                    gap_inquiry_stop();
+                } else {
+                    printf("[HCI] Ignored Gamepad %s (Slot mismatch)\n", bd_addr_to_str(addr));
+                }
             }
             break;
         }
@@ -168,15 +358,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (device_found) {
                 printf("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
-                hci_send_cmd(&hci_create_connection, current_device_addr,
-                             hci_usable_acl_packet_types(), 0, 0, 0, 1);
-                break;
-            }
-            if (event_type == HCI_EVENT_INQUIRY_COMPLETE) {
-                printf("[HCI] Restart inquiry\n");
-                gap_inquiry_start(30);
-                gap_connectable_control(1);
-                gap_discoverable_control(1);
+                l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_CONTROL, MTU_CONTROL, &hid_control_cid);
             }
             break;
         }
@@ -188,7 +370,14 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 device_found = false;
                 new_pair = false;
                 printf("[HCI] Create connection rejected, restart inquiry\n");
-                // gap_inquiry_start(30);
+                want_inquiry = true;
+            }
+            if (opcode == HCI_OPCODE_HCI_DISCONNECT && status != ERROR_CODE_SUCCESS) {
+                printf("[HCI] Disconnect failed (status %02x). Forcing state cleanup.\n", status);
+                acl_handle = HCI_CON_HANDLE_INVALID;
+                hid_control_cid = 0;
+                hid_interrupt_cid = 0;
+                want_inquiry = true;
             }
             break;
         }
@@ -207,8 +396,17 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 acl_handle = handle;
                 hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
                 printf("[HCI] ACL connected handle=0x%04X\n", handle);
-                printf("[HCI] Request authentication on handle=0x%04X\n", handle);
-                hci_send_cmd(&hci_authentication_requested, handle);
+                
+                if (!new_pair) {
+                    bool allowed = false;
+                    if (slot_occupied[current_slot] && memcmp(current_device_addr, slot_addrs[current_slot], 6) == 0) {
+                        allowed = true;
+                    }
+                    if (!allowed) {
+                        printf("[HCI] Reconnection rejected: Slot mismatch\n");
+                        bt_disconnect();
+                    }
+                }
             } else {
                 device_found = false;
                 new_pair = false;
@@ -221,14 +419,33 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_LINK_KEY_REQUEST: {
             bd_addr_t addr;
             hci_event_link_key_request_get_bd_addr(packet, addr);
+            
+            // Profile Enforcement at Link Key level:
+            bool allowed = false;
+            if (!slot_occupied[current_slot]) {
+                if (new_pair) {
+                    bool owned_by_other = false;
+                    for(int i=0; i<4; i++) {
+                        if(slot_occupied[i] && memcmp(addr, slot_addrs[i], 6) == 0) {
+                            owned_by_other = true; 
+                            break;
+                        }
+                    }
+                    if (!owned_by_other) allowed = true;
+                }
+            } else if (memcmp(addr, slot_addrs[current_slot], 6) == 0) {
+                allowed = true;
+            }
+            
+            if (!allowed) {
+                printf("[Slot] REJECTED Key Request: %s does not belong here!\n", bd_addr_to_str(addr));
+                hci_send_cmd(&hci_link_key_request_negative_reply, addr);
+                break;
+            }
+
             link_key_t link_key;
             link_key_type_t link_key_type;
             bool link = gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
-            printf("[HCI] Link key: ");
-            for (int i = 0; i < sizeof(link_key_t); i++) {
-                printf("%02X", link_key[i]);
-            }
-            printf("\n");
             if (link) {
                 printf("[HCI] Link key request from %s, reply stored key type=%u\n", bd_addr_to_str(addr),
                        (unsigned int) link_key_type);
@@ -243,8 +460,30 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_USER_CONFIRMATION_REQUEST: {
             bd_addr_t addr;
             hci_event_user_confirmation_request_get_bd_addr(packet, addr);
-            printf("[HCI] User confirmation request from %s, accept\n", bd_addr_to_str(addr));
-            hci_send_cmd(&hci_user_confirmation_request_reply, addr);
+            
+            bool allowed = false;
+            if (!slot_occupied[current_slot]) {
+                if (new_pair) {
+                    bool owned_by_other = false;
+                    for(int i=0; i<4; i++) {
+                        if(slot_occupied[i] && memcmp(addr, slot_addrs[i], 6) == 0) {
+                            owned_by_other = true; 
+                            break;
+                        }
+                    }
+                    if (!owned_by_other) allowed = true;
+                }
+            } else if (memcmp(addr, slot_addrs[current_slot], 6) == 0) {
+                allowed = true;
+            }
+            
+            if (allowed) {
+                printf("[HCI] User confirmation request from %s, accept\n", bd_addr_to_str(addr));
+                hci_send_cmd(&hci_user_confirmation_request_reply, addr);
+            } else {
+                printf("[HCI] REJECTED user confirmation from %s (Ghost Re-Pair Blocked!)\n", bd_addr_to_str(addr));
+                hci_send_cmd(&hci_user_confirmation_request_negative_reply, addr);
+            }
             break;
         }
 
@@ -261,11 +500,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
             printf("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
             if (status != ERROR_CODE_SUCCESS) {
-                printf("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
-                gap_drop_link_key_for_bd_addr(current_device_addr);
-                // gap_inquiry_start(30);
-            } else {
-                hci_send_cmd(&hci_set_connection_encryption, handle, 1);
+                printf("[HCI] Authentication failed, isolating device %s\n", bd_addr_to_str(current_device_addr));
+                bt_disconnect();
             }
             break;
         }
@@ -276,17 +512,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t enabled = hci_event_encryption_change_get_encryption_enabled(packet);
             printf("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n", handle, status, enabled);
             if (status == ERROR_CODE_SUCCESS && enabled) {
-                printf("[L2CAP] Open HID channels\n");
-                if (new_pair) {
-                    if (hid_control_cid == 0) {
-                        l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_CONTROL, MTU_CONTROL,
-                                             &hid_control_cid);
-                    } else if (hid_interrupt_cid == 0) {
-                        l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_INTERRUPT,
-                                             MTU_INTERRUPT,
-                                             &hid_interrupt_cid);
-                    }
-                }
+                printf("[HCI] Encryption enabled\n");
+                oled_set_status("Connected");
             }
             break;
         }
@@ -296,10 +523,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hci_event_connection_request_get_bd_addr(packet, addr);
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
             printf("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
+            
+            // BTstack automatically accepts connections. We just track the address.
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
                 gap_inquiry_stop();
-                hci_send_cmd(&hci_accept_connection_request, addr, 0x01);
             }
             break;
         }
@@ -324,8 +552,17 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             feature_data.clear();
             while (queue_try_remove(&send_fifo, NULL)) {}
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
-            printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
-            gap_inquiry_start(30);
+            printf("[HCI] Disconnected reason=0x%02X\n", reason);
+
+            if (pending_slot != -1) {
+                printf("[Slot] Finalizing switch to Slot %d\n", pending_slot + 1);
+                current_slot = pending_slot;
+                pending_slot = -1;
+            }
+
+            oled_set_status("Disconnected");
+            want_disconnect = false; // Clear disconnect flag
+            want_inquiry = true;     // Safely queue the inquiry start
             break;
         }
     }
@@ -397,8 +634,43 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (status == 0) {
                 const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
                 if (psm == PSM_HID_CONTROL) {
+                    bd_addr_t addr;
+                    l2cap_event_channel_opened_get_address(packet, addr);
+                    
+                    bool allowed = false;
+                    if (!slot_occupied[current_slot]) {
+                        bool owned_by_other = false;
+                        for(int i=0; i<4; i++) {
+                            if(slot_occupied[i] && memcmp(addr, slot_addrs[i], 6) == 0) {
+                                owned_by_other = true; 
+                                break;
+                            }
+                        }
+                        if (!owned_by_other) allowed = true;
+                    } else if (memcmp(addr, slot_addrs[current_slot], 6) == 0) {
+                        allowed = true;
+                    }
+
+                    if (!allowed) {
+                        printf("[Slot] L2CAP REJECTED: Controller belongs to another slot!\n");
+                        bt_disconnect();
+                        break;
+                    }
+
+                    if (!slot_occupied[current_slot]) {
+                        printf("[Slot] ASSIGNING: Locking Slot %d to %s\n", current_slot + 1, bd_addr_to_str(addr));
+                        bd_addr_copy(slot_addrs[current_slot], addr);
+                        slot_occupied[current_slot] = true;
+                        save_slots_to_flash();
+                    }
+
                     printf("[L2CAP] HID Control opened cid=0x%04X\n", local_cid);
                     hid_control_cid = local_cid;
+                    
+                    if (new_pair) {
+                        printf("[L2CAP] Initiating HID Interrupt channel\n");
+                        l2cap_create_channel(l2cap_packet_handler, addr, PSM_HID_INTERRUPT, MTU_INTERRUPT, &hid_interrupt_cid);
+                    }
                 } else if (psm == PSM_HID_INTERRUPT) {
                     printf("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
                     hid_interrupt_cid = local_cid;
@@ -444,11 +716,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 }*/
             } else {
                 const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
-                hid_control_cid = 0;
-                hid_interrupt_cid = 0;
-                device_found = false;
                 printf("[L2CAP] Open failed psm=0x%04X status=0x%02X\n", psm, status);
-                bt_disconnect();
             }
             break;
         }
@@ -456,23 +724,43 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
         case L2CAP_EVENT_INCOMING_CONNECTION: {
             const uint16_t local_cid = l2cap_event_incoming_connection_get_local_cid(packet);
             const uint16_t psm = l2cap_event_incoming_connection_get_psm(packet);
-            printf("[L2CAP] Incoming connection psm=0x%04X cid=0x%04X\n", psm, local_cid);
-            l2cap_accept_connection(local_cid);
+            
+            bd_addr_t addr;
+            l2cap_event_incoming_connection_get_address(packet, addr);
+
+            bool allowed = false;
+            if (slot_occupied[current_slot] && memcmp(addr, slot_addrs[current_slot], 6) == 0) {
+                allowed = true;
+            } else if (!slot_occupied[current_slot] && new_pair) {
+                allowed = true;
+            }
+
+            if (allowed) {
+                printf("[L2CAP] Incoming connection psm=0x%04X cid=0x%04X ACCEPTED\n", psm, local_cid);
+                l2cap_accept_connection(local_cid);
+            } else {
+                printf("[L2CAP] Incoming connection psm=0x%04X cid=0x%04X REJECTED (Unauthorized Controller!)\n", psm, local_cid);
+                l2cap_decline_connection(local_cid);
+                bt_disconnect(); // Hard kick them off the ACL link
+            }
             break;
         }
 
         case L2CAP_EVENT_CHANNEL_CLOSED: {
             const uint16_t local_cid = l2cap_event_channel_closed_get_local_cid(packet);
+            bool was_hid = false;
             if (local_cid == hid_control_cid) {
                 hid_control_cid = 0;
                 printf("[L2CAP] HID Control closed cid=0x%04X\n", local_cid);
+                was_hid = true;
             } else if (local_cid == hid_interrupt_cid) {
                 hid_interrupt_cid = 0;
                 printf("[L2CAP] HID Interrupt closed cid=0x%04X\n", local_cid);
+                was_hid = true;
             } else {
-                printf("[L2CAP] Channel closed cid=0x%04X\n", local_cid);
+                printf("[L2CAP] Other Channel closed cid=0x%04X (SDP?)\n", local_cid);
             }
-            if (hid_control_cid == 0 && hid_interrupt_cid == 0) {
+            if (was_hid && hid_control_cid == 0 && hid_interrupt_cid == 0) {
                 bt_disconnect();
             }
             break;
