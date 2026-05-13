@@ -15,6 +15,13 @@ enum CHANNEL_TYPE {
 
 typedef void (*bt_data_callback_t)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len);
 
+extern int current_slot;
+void bt_set_slot(int slot);
+int bt_get_slot();
+void bt_forget_current_slot();
+void bt_clear_all_slots();
+void bt_update();
+
 int bt_init();
 void bt_register_data_callback(bt_data_callback_t callback);
 void bt_send_packet(uint8_t *data, uint16_t len);

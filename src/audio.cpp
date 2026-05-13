@@ -165,6 +165,7 @@ static OpusEncoder *encoder;
 static WDL_Resampler resampler_audio;
 
 void core1_entry() {
+    multicore_lockout_victim_init();
     int error = 0;
     encoder = opus_encoder_create(48000, 2,OPUS_APPLICATION_AUDIO, &error);
     if (error != 0) {

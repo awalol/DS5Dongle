@@ -24,6 +24,7 @@
 
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
+#include "oled.h"
 
 int reportSeqCounter = 0;
 uint8_t packetCounter = 0;
@@ -84,6 +85,17 @@ void interrupt_loop() {
 void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
     if (channel == INTERRUPT && data[1] == 0x31) {
+        // Battery info is at data[55] in the L2CAP packet
+        // (Header 0xA1, ID 0x31, then payload offset 53)
+        // Bits 0-3: Level (0-8 scale)
+        // Bit 4: Cable connected
+        // Bit 5: Charging status
+        uint8_t batt_byte = data[55];
+        uint8_t level = batt_byte & 0x0F;
+        bool charging = (batt_byte & 0x20) != 0; 
+        
+        oled_set_battery(level, charging);
+
         if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
             set_headset(data[56] & 1);
         }
@@ -216,10 +228,67 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     }
 }
 
+#define BTN_KEY0 15
+#define BTN_KEY1 17
+
+void handle_buttons() {
+    static bool key0_pressed = false;
+    static uint32_t key1_press_start = 0;
+    static bool key1_handled = false;
+
+    if (!gpio_get(BTN_KEY0)) {
+        if (!key0_pressed) {
+            int next_slot = (bt_get_slot() + 1) % 4;
+            bt_set_slot(next_slot);
+            oled_set_status("Slot Switched");
+            key0_pressed = true;
+        }
+    } else {
+        key0_pressed = false;
+    }
+
+    if (!gpio_get(BTN_KEY1)) {
+        if (key1_press_start == 0) {
+            key1_press_start = time_us_32();
+            key1_handled = false;
+        } else if (!key1_handled && (time_us_32() - key1_press_start > 3000000)) {
+            bt_clear_all_slots();
+            oled_set_status("All Cleared!");
+            key1_handled = true;
+        } else if (!key1_handled && (time_us_32() - key1_press_start > 500000)) {
+            // Show feedback after 0.5s of holding
+            oled_set_status("Wiping...");
+        }
+    } else {
+        if (key1_press_start != 0) {
+            if (!key1_handled && (time_us_32() - key1_press_start > 50000)) { // 50ms debounce
+                bt_forget_current_slot();
+                oled_set_status("Slot Cleared");
+            }
+            key1_press_start = 0;
+        }
+    }
+}
+
+#include "hardware/watchdog.h"
+#include "hardware/structs/watchdog.h"
+
 int main() {
     vreg_set_voltage(VREG_VOLTAGE_1_20);
     sleep_ms(1000);
     set_sys_clock_khz(320000, true);
+
+    oled_init();
+    oled_set_status("Booting...");
+
+    // Setup Buttons
+    gpio_init(BTN_KEY0);
+    gpio_set_dir(BTN_KEY0, GPIO_IN);
+    gpio_pull_up(BTN_KEY0);
+
+    gpio_init(BTN_KEY1);
+    gpio_set_dir(BTN_KEY1, GPIO_IN);
+    gpio_pull_up(BTN_KEY1);
 
     board_init();
     tusb_rhport_init_t dev_init = {
@@ -290,5 +359,7 @@ int main() {
 #if ENABLE_BATT_LED
         battery_led_tick();
 #endif
+        handle_buttons();
+        bt_update();
     }
 }

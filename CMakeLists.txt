@@ -65,6 +65,7 @@ add_executable(ds5-bridge
         src/bt.cpp
         src/config.cpp
         src/cmd.cpp
+        src/oled.cpp
 )
 
 if (ENABLE_BATT_LED)
@@ -91,7 +92,6 @@ target_compile_definitions(wdl_resampler PRIVATE
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
         ENABLE_SERIAL=${ENABLE_SERIAL_VALUE}
-        PICO_FLASH_ASSUME_CORE1_SAFE=1
         WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=5
         PICO_STDIO_USB_USE_DEFAULT_DESCRIPTORS=0
@@ -141,6 +141,7 @@ target_link_libraries(ds5-bridge
         hardware_watchdog
         hardware_timer
         hardware_flash
+        hardware_spi
         pico_btstack_classic
 #        pico_cyw43_arch_threadsafe_background
         pico_cyw43_arch_poll
