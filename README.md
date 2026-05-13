@@ -11,10 +11,40 @@ This project enables the Raspberry Pi Pico2W to function as a Bluetooth bridge f
 ## Features
 
 - 🎮 Full DualSense connectivity via Pico2W
+- 📺 **OLED Multi-Slot UI**: Hardware display module for pairing management, slot isolation, and detailed battery metrics.
 - 🔊 Supports HD haptics (advanced vibration feedback)
 - 📡 Wireless Bluetooth bridging
 - ⚙️ Adjustable haptic gain via microphone volume
 - 🔕 Configurable LED and disconnection behaviors
+
+## OLED Multi-Slot System (Hardware Mod)
+
+This repository includes support for an optional **Waveshare 1.3-inch OLED (SH1107)** display to provide a graphical UI for managing multiple controllers. Because the Pico 2W Bluetooth chip has a hardcoded MAC address, true "virtual dongles" are impossible. Instead, this mod implements strict software-level slot isolation using BTstack's L2CAP and HCI handlers.
+
+### Required Hardware
+- **Raspberry Pi Pico 2W**
+- **Waveshare 1.3-inch OLED (SH1107)** (SPI version)
+- **2x Momentary Push Buttons**
+
+### Wiring & Pins
+| Component | Pin | Pico 2W GPIO |
+| :--- | :--- | :--- |
+| **OLED** | `DIN` | GP11 (SPI1 TX) |
+| | `CLK` | GP10 (SPI1 SCK) |
+| | `CS` | GP9 (SPI1 CSn) |
+| | `DC` | GP8 |
+| | `RST` | GP12 |
+| **Buttons** | `Next` | GP15 (Connect to GND, Pull-up enabled in code) |
+| | `Wipe` | GP17 (Connect to GND, Pull-up enabled in code) |
+
+*Note: The display is intended to be mounted vertically (rotated 90 degrees), with the physical buttons located at the bottom.*
+
+### OLED Features
+* **4-Slot Memory**: Safely stores 4 different controller pairings in flash memory. Prevents "ghost" controllers from hijacking your active connection.
+* **High-Detail Pixel Art UI**: Crisp 16x16 pixel art icons for Gamepad, Hourglass (Scanning/Waiting), and Soft-Keys.
+* **Accurate Battery Monitoring**: Parses raw DualSense reports (Byte 55) to show real-time 0-100% battery and charging status directly on the screen.
+* **Instant Slot Switching**: Press the `Next` button (GP15) to cycle slots. The firmware safely handles the "Zombie Link" disconnect process to ensure instant switching.
+* **Factory Reset**: Hold the `Wipe` (GP17) button for 3 seconds to wipe all 4 slots and clear the Bluetooth pairing NVRAM.
 
 ## Getting Started
 
