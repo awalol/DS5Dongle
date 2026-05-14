@@ -361,7 +361,13 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (get_config().disable_inactive_disconnect) {
                 return;
             }
-            if (packet[3] < 120 || packet[3] > 140) {
+            if (packet[3] < 120 || packet[3] > 140 ||
+                packet[4] < 120 || packet[4] > 140 ||
+                packet[5] < 120 || packet[5] > 140 ||
+                packet[6] < 120 || packet[6] > 140 ||
+                packet[7] > 0 || packet[8] > 0 ||
+                packet[10] != 0x08 || packet[11] != 0x00 ||
+                packet[12] != 0x00) {
                 inactive_time = get_absolute_time();
             } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) >
                        static_cast<int64_t>(get_config().inactive_time) * 60 * 1000 * 1000) {
