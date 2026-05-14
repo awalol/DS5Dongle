@@ -32,7 +32,7 @@
 
 static void set_clock_with_cyw43(uint32_t khz, enum vreg_voltage voltage) {
     vreg_set_voltage(voltage);
-    sleep_ms(2);
+    sleep_us(100);
     set_sys_clock_khz(khz, true);
     uint32_t div_int = khz / (2u * CYW43_SPI_KHZ);
     if (div_int < 1) div_int = 1;
@@ -273,15 +273,13 @@ int main() {
 #if ENABLE_BATT_LED
         battery_led_tick();
 #endif
-        // Dynamic clock: SYS_CLOCK_KHZ when connected, SYS_CLOCK_IDLE_KHZ when idle
+        // Reduce BT scan rate when idle to lower radio power
         static bool last_connected = false;
         const bool connected = bt_is_connected();
         if (connected != last_connected) {
             if (connected) {
-                set_clock_with_cyw43(SYS_CLOCK_KHZ, VREG_VOLTAGE_1_20);
                 bt_set_scan_active();
             } else {
-                set_clock_with_cyw43(SYS_CLOCK_IDLE_KHZ, VREG_VOLTAGE_1_10);
                 bt_set_scan_idle();
             }
             last_connected = connected;
