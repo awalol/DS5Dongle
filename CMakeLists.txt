@@ -59,14 +59,14 @@ else ()
 endif ()
 option(PICO_W_BUILD "Build for Rasberry Pi Pico W, audio is missing" OFF)
 if (PICO_W_BUILD)
-        set(PICO_W_BUILD_VALUE 1)
         set(CYW43_PIO_CLOCK_DIV_VALUE 3)
         set(SYS_CLOCK_KHZ_VALUE 200000)
+        set(SYS_CLOCK_IDLE_KHZ_VALUE 133000)
         set(DISABLE_SPEAKER_PROC_VALUE 1)
 else ()
-        set(PICO_W_BUILD_VALUE 0)
         set(CYW43_PIO_CLOCK_DIV_VALUE 5)
         set(SYS_CLOCK_KHZ_VALUE 320000)
+        set(SYS_CLOCK_IDLE_KHZ_VALUE 133000)
 endif ()
 
 
@@ -124,8 +124,8 @@ target_compile_definitions(ds5-bridge PRIVATE
         PICO_STDIO_USB_ENABLE_RESET_VIA_VENDOR_INTERFACE=0
         ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
         ENABLE_BATT_LED=${ENABLE_BATT_LED_VALUE}
-        PICO_W_BUILD=${PICO_W_BUILD_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
+        SYS_CLOCK_IDLE_KHZ=${SYS_CLOCK_IDLE_KHZ_VALUE}
         DISABLE_SPEAKER_PROC=${DISABLE_SPEAKER_PROC_VALUE}
 )
 

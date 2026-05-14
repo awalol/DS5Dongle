@@ -19,8 +19,6 @@
 #include "gap.h"
 
 // Page scan intervals in units of 0.625ms
-// Default: 0x0800 (~1280ms interval) / 0x0012 (~11ms window)
-// Idle:    0x1000 (~2560ms interval) / 0x0012 (~11ms window) - half duty cycle
 #define PAGE_SCAN_INTERVAL_ACTIVE   0x0800
 #define PAGE_SCAN_WINDOW_ACTIVE     0x0012
 #define PAGE_SCAN_INTERVAL_IDLE     0x1000

@@ -25,18 +25,16 @@
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
 
-// CYW43 SPI target frequency in Hz (32MHz - keep constant across clock changes)
-// At 320MHz with CYW43_PIO_CLOCK_DIV_INT=5: 320MHz/(2*5) = 32MHz
-#define CYW43_SPI_HZ 32000000u
+// CYW43 SPI frequency = SYS_CLOCK_KHZ / (2 * CYW43_PIO_CLOCK_DIV_INT)
+// Pico 2W: 320000 / (2*5) = 32000 kHz
+// Pico W:  200000 / (2*3) = 33333 kHz
+#define CYW43_SPI_KHZ (SYS_CLOCK_KHZ / (2 * CYW43_PIO_CLOCK_DIV_INT))
 
 static void set_clock_with_cyw43(uint32_t khz, enum vreg_voltage voltage) {
-    // Change CPU clock and recalculate CYW43 PIO divider to maintain SPI speed
     vreg_set_voltage(voltage);
     sleep_ms(2);
     set_sys_clock_khz(khz, true);
-    // Recalculate divider: div = sys_clock_hz / (2 * CYW43_SPI_HZ)
-    uint32_t sys_hz = khz * 1000u;
-    uint32_t div_int = sys_hz / (2u * CYW43_SPI_HZ);
+    uint32_t div_int = khz / (2u * CYW43_SPI_KHZ);
     if (div_int < 1) div_int = 1;
     cyw43_set_pio_clkdiv_int_frac8(div_int, 0);
 }
@@ -208,8 +206,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 int main() {
     vreg_set_voltage(VREG_VOLTAGE_1_20);
     sleep_ms(1000);
-    set_sys_clock_khz(320000, true);
-
+    set_sys_clock_khz(SYS_CLOCK_KHZ, true);
     board_init();
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
@@ -273,21 +270,21 @@ int main() {
         tud_task();
         audio_loop();
         interrupt_loop();
-// Dynamic clock: 320MHz when connected, 133MHz when idle
+#if ENABLE_BATT_LED
+        battery_led_tick();
+#endif
+        // Dynamic clock: SYS_CLOCK_KHZ when connected, SYS_CLOCK_IDLE_KHZ when idle
         static bool last_connected = false;
         const bool connected = bt_is_connected();
         if (connected != last_connected) {
             if (connected) {
-                set_clock_with_cyw43(320000, VREG_VOLTAGE_1_20);
+                set_clock_with_cyw43(SYS_CLOCK_KHZ, VREG_VOLTAGE_1_20);
                 bt_set_scan_active();
             } else {
-                set_clock_with_cyw43(133000, VREG_VOLTAGE_1_10);
+                set_clock_with_cyw43(SYS_CLOCK_IDLE_KHZ, VREG_VOLTAGE_1_10);
                 bt_set_scan_idle();
             }
             last_connected = connected;
         }
-#if ENABLE_BATT_LED
-        battery_led_tick();
-#endif
     }
 }
