@@ -102,6 +102,15 @@ jobs:
             -DENABLE_BATT_LED=OFF
           cmake --build build/no-batt-led --target ds5-bridge
 
+      - name: Build Pico W firmware
+        run: |
+          cmake -S . -B build/picow -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DPICO_W_BUILD=ON
+          cmake --build build/picow --target ds5-bridge
+          cp build/picow/ds5-bridge.uf2 artifacts/ds5-bridge-picow.uf2
+
       - name: Upload standard UF2 artifact
         uses: actions/upload-artifact@v7
         with:
@@ -113,5 +122,12 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/ds5-bridge-debug.uf2
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload PicoW UF2 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/ds5-bridge-picow.uf2
           archive: false
           if-no-files-found: error

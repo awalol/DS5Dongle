@@ -64,6 +64,7 @@ void audio_loop() {
     const float audio_gain = mute[0] ? 0.0f : powf(10.0f, get_config().speaker_volume / 20.0f);
     const float haptics_gain = get_config().haptics_gain;
     for (int i = 0; i < nframes; i++) {
+ #if !DISABLE_SPEAKER_PROC       
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f * audio_gain;
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * audio_gain;
         if (audio_buf_pos == 512 * 2) {
@@ -77,7 +78,7 @@ void audio_loop() {
             }
             audio_buf_pos = 0;
         }
-
+#endif
         in_buf[i * 2] = static_cast<WDL_ResampleSample>(clamp(raw[i * INPUT_CHANNELS + 2] / 32768.0f * haptics_gain,
                                                               -1.0f, 1.0f));
         in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(clamp(raw[i * INPUT_CHANNELS + 3] / 32768.0f * haptics_gain,
