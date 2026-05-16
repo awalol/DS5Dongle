@@ -1,6 +1,6 @@
 # Pico2W DualSense 5 Bridge
 
-[中文](./README.md)
+[中文](./README.md) · [Changelog](./CHANGELOG.md)
 
 > Turn a Raspberry Pi Pico2W into a wireless adapter for the DualSense (DS5) controller.
 
@@ -114,20 +114,140 @@ To build the project from source:
 
 Hardware purchase info is in [Hardware](#hardware). What the firmware does with the display:
 
-### Six screens (cycle with KEY0)
+### Boot splash (1.5 s on power-on)
 
-1. **Status** — connection state, paired DualSense BD address, battery percentage with bar (charging marker `+`, complete `*`, error `!`), both analog stick positions live, D-pad indicator, face buttons (△ ◯ ✕ □) and L1/R1 shoulder buttons, L2/R2 analog trigger fill bars
-2. **Diagnostics** — uptime, HCI command-send error count, audio FIFO drops, Opus FIFO drops, BT state
-3. **Trigger Test** — cycle 7 adaptive trigger effects with KEY1: Off / Feedback / Weapon / Vibration / Bow / Gallop / Machine Gun. Pull L2 / R2 to feel each effect.
-4. **Gyro Tilt** — live X/Y/Z accelerometer readout with a crosshair box that tracks tilt in real time
-5. **Touchpad** — live touchpad render; dots appear where fingers are touching, with a finger count
-6. **Lightbar** — tilt the controller on each axis to dial in R / G / B (live readout + intensity bars); press KEY1 to apply to the DualSense's actual lightbar
+```
+┌──────────────────────────────┐
+│                              │
+│         DS5 Bridge           │
+│          v0.5.4              │
+│       Pico2W + OLED          │
+│                              │
+└──────────────────────────────┘
+```
+
+### Six screens, cycled with KEY0
+
+#### 1. Status
+
+Connection state, paired DualSense BD address, battery percentage with bar (`+` charging / `*` complete / `!` error), live analog stick positions, D-pad indicator, face buttons (△ ◯ ✕ □), L1/R1 indicators, L2/R2 analog trigger fill bars.
+
+```
+┌──────────────────────────────┐
+│ DS5 Bridge v0.5.4      [ON]  │
+│ 14:3A:9A:FF:D9:F9            │
+│ Batt: 87%+   ████████░░░░░░  │
+│                              │
+│ ┌────┐  L1    △     R1 ┌────┐│
+│ │ ·• │  L2  ○   □  R2  │ ·• ││
+│ │    │   ▌    ✕     ▌  │    ││
+│ └────┘                  └────┘│
+└──────────────────────────────┘
+  └ L-stick    └ D-pad/face btns
+            └ vertical bars = L2/R2 analog triggers
+```
+
+When no controller is paired, the status line shows `[--]` and the body shows `(waiting for DS5)`.
+
+#### 2. Diagnostics
+
+Uptime since boot, HCI command-send error count (from the `HCI_LOG_CMD` macro), audio FIFO drop count, Opus FIFO drop count, BT state.
+
+```
+┌──────────────────────────────┐
+│ Diagnostics                  │
+│ Up: 0h 14m 22s               │
+│ HCI errs:    0               │
+│ Aud drops:   0               │
+│ Opus drops:  0               │
+│ BT: connected                │
+│                              │
+│ K0=next K1=rumble            │
+└──────────────────────────────┘
+```
+
+#### 3. Trigger Test
+
+KEY1 cycles through seven adaptive trigger effects applied to both L2 and R2. Pull each trigger to feel the effect — resistance, snap point, vibration patterns, etc.
+
+```
+┌──────────────────────────────┐
+│ Trigger Test                 │
+│ Mode: Weapon                 │
+│ L2: 127   R2:  42            │
+│                              │
+│ ████░░░░░░     ██░░░░░░░░    │
+│  (L2 pull)      (R2 pull)    │
+│                              │
+│ K0=next K1=cycle             │
+└──────────────────────────────┘
+```
+
+Cycle order: **Off → Feedback → Weapon → Vibration → Bow → Gallop → Machine Gun → Off …**
+
+Trigger effect bytes follow [dualsensectl](https://github.com/nowrep/dualsensectl)'s reverse-engineering with bitpacked 10-zone arrays, all at max strength so the effect is clearly felt.
+
+#### 4. Gyro Tilt
+
+Live X/Y/Z accelerometer values with a 40×40 crosshair box. Tilt the controller and watch the dot move in real time.
+
+```
+┌──────────────────────────────┐
+│ Gyro Tilt                    │
+│ X +123  Y -456  Z +8123      │
+│         ┌────────┐           │
+│         │   │    │           │
+│         │───•────│           │
+│         │   │    │           │
+│         └────────┘           │
+└──────────────────────────────┘
+```
+
+#### 5. Touchpad
+
+Live render of the touchpad surface. Dots appear at the current finger positions; the finger count below the box updates as fingers touch / leave.
+
+```
+┌──────────────────────────────┐
+│ Touchpad                     │
+│ ┌──────────────────────────┐ │
+│ │    •              •      │ │
+│ │                          │ │
+│ └──────────────────────────┘ │
+│ Fingers: 2                   │
+│                              │
+│ K0=next                      │
+└──────────────────────────────┘
+```
+
+#### 6. Lightbar Color Picker
+
+Live RGB preview on the controller's actual lightbar. While on this screen, the firmware sends the tilt-derived color to the DualSense at 10 Hz so the lightbar IS the visual preview (the OLED is monochrome).
+
+```
+┌──────────────────────────────┐
+│ Lightbar        [LIVE]       │
+│ R:128 G: 77 B:200            │
+│ ████░░░  ██░░░░░  ██████░░   │
+│  (R)     (G)      (B)        │
+│ Sv: T=0 C=1 X=2 S=3          │
+│ Tilt = R/G/B                 │
+│ K0=next K1=cycle             │
+└──────────────────────────────┘
+```
+
+- Tilt the controller on each axis to dial in R / G / B
+- Press **△ ◯ ✕ □** on the controller to save the current color into **favorite slot 0 / 1 / 2 / 3**
+- Press **KEY1** to cycle the mode tag: `[LIVE]` → `[FAV0]` → `[FAV1]` → `[FAV2]` → `[FAV3]` → back to `[LIVE]`
+- Default favorites: Red, Green, Blue, White
 
 ### KEY1 behavior by screen
 
-- On **Trigger Test**: cycles trigger effect preset (Off → Feedback → Weapon → Vibration → Bow → Gallop → Machine → Off …)
-- On **Lightbar**: applies the current tilt-derived RGB to the controller's lightbar
-- On any other screen: sends a 250 ms test rumble burst to the DualSense (useful for verifying the firmware → controller output path without a host)
+| Screen | KEY1 action |
+|---|---|
+| Status, Diagnostics, Gyro Tilt, Touchpad | Send a 250 ms test-rumble burst to the DualSense (validates firmware → controller path without needing a host) |
+| Trigger Test | Cycle the trigger effect preset |
+| Lightbar Color Picker | Cycle between LIVE preview and the 4 favorite slots |
 
 ### Pinout (standard Waveshare Pico HAT layout)
 
