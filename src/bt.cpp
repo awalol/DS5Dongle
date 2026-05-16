@@ -41,7 +41,7 @@ static bt_data_callback_t bt_data_callback = nullptr;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
 static queue<vector<uint8_t> > send_queue;
 static critical_section_t queue_lock;
-uint32_t inactive_time = 0; // Controller has been silent for a long time
+static uint32_t inactive_time = 0; // Controller has been silent for a long time
 
 void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
@@ -106,21 +106,6 @@ int bt_init() {
     return 0;
 }
 
-/*int main() {
-    stdio_init_all();
-
-    /*while (!stdio_usb_connected()) {
-        sleep_ms(100);
-    }
-    printf("USB Serial connected!\n");#1#
-
-    bt_init();
-
-    while (1) {
-        sleep_ms(10);
-    }
-}*/
-
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
     (void) channel;
 
@@ -153,7 +138,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 hci_event_extended_inquiry_response_get_bd_addr(packet, addr);
             }
 
-            // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
+            // CoD mask matches Major Class = Peripheral (0x05). Does not narrow to Minor=Gamepad
+            // (a tighter check would be `(cod & 0x00FF1F) == 0x000508`); H6 will tighten this.
             if ((cod & 0x000F00) == 0x000500) {
                 printf("[HCI] Gamepad found: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int) cod);
                 bd_addr_copy(current_device_addr, addr);
@@ -182,7 +168,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 device_found = false;
                 new_pair = false;
                 printf("[HCI] Create connection rejected, restart inquiry\n");
-                // gap_inquiry_start(30);
+                gap_inquiry_start(30);
             }
             break;
         }
@@ -207,7 +193,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 device_found = false;
                 new_pair = false;
                 printf("[HCI] ACL connect failed status=0x%02X, restart inquiry\n", status);
-                // gap_inquiry_start(30);
+                gap_inquiry_start(30);
             }
             break;
         }
@@ -218,11 +204,6 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             link_key_t link_key;
             link_key_type_t link_key_type;
             bool link = gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
-            printf("[HCI] Link key: ");
-            for (int i = 0; i < sizeof(link_key_t); i++) {
-                printf("%02X", link_key[i]);
-            }
-            printf("\n");
             if (link) {
                 printf("[HCI] Link key request from %s, reply stored key type=%u\n", bd_addr_to_str(addr),
                        (unsigned int) link_key_type);
@@ -257,7 +238,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (status != ERROR_CODE_SUCCESS) {
                 printf("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
                 gap_drop_link_key_for_bd_addr(current_device_addr);
-                // gap_inquiry_start(30);
+                gap_inquiry_start(30);
             } else {
                 hci_send_cmd(&hci_set_connection_encryption, handle, 1);
             }
@@ -329,6 +310,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (mute[1]) { // Microphone mute is enabled
                 return;
             }
+            if (size < 4) return;
             if (packet[3] < 120 || packet[3] > 140) {
                 inactive_time = time_us_32();
             }else if (time_us_32() - inactive_time > 1800 * 1000 * 1000){
@@ -337,10 +319,12 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 bt_disconnect();
             }
         } else if (channel == hid_control_cid) {
-            if (packet[0] == 0xA3) {
+            if (size >= 2 && packet[0] == 0xA3) {
                 uint8_t report_id = packet[1];
-                feature_data[report_id].assign(packet + 1, packet + size);
-                printf("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 1);
+                if (feature_data.size() < 32 || feature_data.contains(report_id)) {
+                    feature_data[report_id].assign(packet + 1, packet + size);
+                    printf("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 1);
+                }
             }
             printf("[L2CAP] HID Control data len=%u\n", size);
             printf_hexdump(packet, size);
@@ -499,17 +483,20 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     return ret;
 }
 
-void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len) {
-    if (hid_control_cid != 0) {
-        uint8_t get_feature[len + 2];
-        get_feature[0] = 0x53;
-        get_feature[1] = reportId;
-        memcpy(get_feature + 2,data,len);
-        fill_feature_report_checksum(get_feature + 1,len + 1);
-        l2cap_send(hid_control_cid, get_feature, len + 2);
-        printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
-        printf_hexdump(get_feature,len + 2);
+void set_feature_data(uint8_t reportId, const uint8_t* data, uint16_t len) {
+    if (hid_control_cid == 0) return;
+    if (len < 4 || len > 62) {
+        printf("[L2CAP] Set Feature Report 0x%02X rejected: len=%u\n", reportId, len);
+        return;
     }
+    uint8_t buf[64];
+    buf[0] = 0x53;
+    buf[1] = reportId;
+    memcpy(buf + 2, data, len);
+    fill_feature_report_checksum(buf + 1, len + 1);
+    l2cap_send(hid_control_cid, buf, len + 2);
+    printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
+    printf_hexdump(buf, len + 2);
 }
 
 void init_feature() {

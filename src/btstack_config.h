@@ -11,7 +11,7 @@
 
 // CYW43 HCI Transport requires pre-buffer space for packet header
 
-// Se estiver 1 ou 2, o 0x31 do DualSense causa estouro
+// If set to 1 or 2, the DualSense 0x31 input report causes a buffer overflow
 #define MAX_NR_HCI_ACL_PACKETS 4
 
 #define MAX_NR_HCI_CONNECTIONS 1
@@ -27,7 +27,7 @@
 #define MAX_NR_RFCOMM_SERVICES 0
 #define MAX_NR_RFCOMM_CHANNELS 0
 
-// CYW43 específico - necessário para o transport layer
+// CYW43-specific - required for the transport layer
 
 #define NVM_NUM_LINK_KEYS 4
 #define NVM_NUM_DEVICE_DB_ENTRIES 4

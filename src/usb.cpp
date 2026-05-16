@@ -11,22 +11,6 @@ float volume[2] = {1.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
 #define UAC1_ENTITY_SPK_FEATURE_UNIT    0x02
 #define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05
 
-/*int main() {
-    board_init();
-
-    tusb_rhport_init_t dev_init = {
-        .role = TUSB_ROLE_DEVICE,
-        .speed = TUSB_SPEED_AUTO
-    };
-    tusb_init(BOARD_TUD_RHPORT, &dev_init);
-
-    board_init_after_tusb();
-
-    while (1) {
-        tud_task();
-    }
-}*/
-
 //--------------------------------------------------------------------+
 // Audio Callback Functions
 //--------------------------------------------------------------------+
@@ -65,7 +49,7 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
                         // Only 1st form is supported
                         TU_VERIFY(p_request->wLength == 2);
 
-                        volume[index] = static_cast<float>(tu_unaligned_read16(pBuff)) / 256;
+                        volume[index] = static_cast<float>(static_cast<int16_t>(tu_unaligned_read16(pBuff))) / 256.0f;
 
                         TU_LOG2("    Set Volume: %d dB of entity: %u\r\n", volume[index], entityID);
                         return true;

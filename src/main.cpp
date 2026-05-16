@@ -12,8 +12,8 @@
 #include "hardware/vreg.h"
 #include "pico/cyw43_arch.h"
 
-int reportSeqCounter = 0;
-uint8_t packetCounter = 0;
+static uint8_t reportSeqCounter = 0;
+static uint8_t packetCounter = 0;
 
 uint8_t interrupt_in_data[63] = {
     0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7,
@@ -35,7 +35,7 @@ void interrupt_loop() {
 
 void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
-    if (channel == INTERRUPT && data[1] == 0x31) {
+    if (channel == INTERRUPT && len >= 66 && data[1] == 0x31) {
         if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
             set_headset(data[56] & 1);
         }
@@ -49,17 +49,16 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
 uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer,
                                uint16_t reqlen) {
     (void) itf;
-    (void) report_id;
     (void) report_type;
-    (void) buffer;
-    (void) reqlen;
 
     std::vector<uint8_t> feature_data = get_feature_data(report_id, reqlen);
-    if (!feature_data.empty()) {
-        memcpy(buffer, feature_data.data() + 1, feature_data.size() - 1);
+    if (feature_data.empty()) return 0;
+    const size_t avail = feature_data.size() - 1;
+    const uint16_t copy_len = (avail < reqlen) ? (uint16_t)avail : reqlen;
+    if (copy_len) {
+        memcpy(buffer, feature_data.data() + 1, copy_len);
     }
-
-    return feature_data.empty() ? 0 : feature_data.size() - 1;
+    return copy_len;
 }
 
 // Invoked when received SET_REPORT control request or
@@ -67,21 +66,18 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
                            uint16_t bufsize) {
     (void) itf;
-    (void) report_id;
     (void) report_type;
-    (void) buffer;
-    (void) bufsize;
 
     // INTERRUPT OUT
     if (report_id == 0) {
+        if (bufsize == 0) return;
         switch (buffer[0]) {
             case 0x02: {
-                uint8_t outputData[78];
+                if (bufsize - 1 > 75) return;
+                uint8_t outputData[78] = {};
                 outputData[0] = 0x31;
                 outputData[1] = reportSeqCounter << 4;
-                if (++reportSeqCounter == 256) {
-                    reportSeqCounter = 0;
-                }
+                reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
                 outputData[2] = 0x10;
                 memcpy(outputData + 3, buffer + 1, bufsize - 1);
                 bt_write(outputData, sizeof(outputData));
@@ -90,7 +86,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         }
     }
     if (report_id == 0x80) {
-        set_feature_data(report_id,const_cast<uint8_t *>(buffer),bufsize);
+        set_feature_data(report_id, buffer, bufsize);
         return;
     }
 }

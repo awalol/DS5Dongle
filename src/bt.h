@@ -22,6 +22,6 @@ void bt_send_control(uint8_t *data, uint16_t len);
 void bt_write(uint8_t* data,uint16_t len);
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
-void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len);
+void set_feature_data(uint8_t reportId, const uint8_t* data, uint16_t len);
 
 #endif //DS5_BRIDGE_BT_H
