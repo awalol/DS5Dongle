@@ -6,7 +6,12 @@
 #include "bsp/board_api.h"
 
 uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
-float volume[2] = {1.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
+// Default speaker volume to 2.0 (top of the 1.0-2.0 range advertised by GET_MAX)
+// so Linux hosts — which don't issue UAC1 SET_CUR the way Windows does — still
+// produce audible speaker output. volume[0] - 1.0 is the audio multiplier in
+// audio_loop; 2.0 - 1.0 = 1.0 = unity gain instead of silence (was the upstream
+// default behavior). Addresses upstream issue #11 (Linux compatibility).
+float volume[2] = {2.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
 
 #define UAC1_ENTITY_SPK_FEATURE_UNIT    0x02
 #define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05
