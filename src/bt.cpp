@@ -52,6 +52,14 @@ void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
 }
 
+bool bt_is_connected() {
+    return hid_interrupt_cid != 0;
+}
+
+void bt_get_addr(uint8_t out[6]) {
+    memcpy(out, current_device_addr, 6);
+}
+
 void bt_send_packet(uint8_t *data, uint16_t len) {
     if (hid_interrupt_cid != 0) {
         l2cap_send(hid_interrupt_cid, data, len);

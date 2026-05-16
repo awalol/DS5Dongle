@@ -12,6 +12,7 @@
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
+#include "oled.h"
 
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
@@ -112,6 +113,7 @@ int main() {
     bt_register_data_callback(on_bt_data);
 
     audio_init();
+    oled_init();
 
     watchdog_enable(8000, 1);
 
@@ -120,6 +122,7 @@ int main() {
         tud_task();
         audio_loop();
         interrupt_loop();
+        oled_loop();
         watchdog_update();
     }
 }

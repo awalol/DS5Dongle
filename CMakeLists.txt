@@ -44,6 +44,7 @@ add_executable(ds5-bridge
         src/usb.cpp
         src/audio.cpp
         src/bt.cpp
+        src/oled.cpp
 )
 
 # Cockos WDLResampler
@@ -98,6 +99,7 @@ target_link_libraries(ds5-bridge
         pico_multicore
         hardware_interp
         hardware_timer
+        hardware_spi
         pico_btstack_classic
 #        pico_cyw43_arch_threadsafe_background
         pico_cyw43_arch_poll
