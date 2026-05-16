@@ -15,6 +15,7 @@ This project enables the Raspberry Pi Pico2W to function as a Bluetooth bridge f
 - 📡 Wireless Bluetooth bridging
 - ⚙️ Adjustable haptic gain via microphone volume
 - 🔕 Configurable LED and disconnection behaviors
+- 📺 Optional Pico-OLED-1.3 status display (battery, BD address, live stick / button / D-pad / trigger visualization)
 
 ## Getting Started
 
@@ -82,9 +83,44 @@ To build the project from source:
 1. Update TinyUSB in the Pico SDK to the latest version
 2. Compile using standard Pico SDK toolchain
 
+## Optional Hardware: Pico-OLED-1.3
+
+A Waveshare Pico-OLED-1.3 (128×64 SH1107) can be plugged on top of the Pico2W headers for a live status display. No firmware reconfiguration needed — the firmware drives it automatically when present, and gracefully ignores it when absent.
+
+### What it shows
+
+- Title bar with `[ON]` / `[--]` connection status
+- Paired DualSense Bluetooth address
+- Battery percentage with bar; suffix `+` when charging, `*` when fully charged, `!` on charge error
+- Both analog stick positions (live)
+- L1/R1 indicators, L2/R2 analog trigger fill bars
+- D-pad direction (with diagonals)
+- Face buttons (△ ◯ ✕ □) with pressed state
+
+### On-board buttons
+
+- **KEY0** — flashes the screen (placeholder for future screen-cycle)
+- **KEY1** — sends a test rumble to the bonded DualSense (validates the firmware → controller path without a host)
+
+### Pinout
+
+The standard Waveshare Pico HAT layout is used:
+
+| Function | GPIO |
+|---|---|
+| MOSI | 11 |
+| SCK  | 10 |
+| CS   | 9  |
+| DC   | 8  |
+| RST  | 12 |
+| KEY0 | 15 |
+| KEY1 | 17 |
+
 ## Roadmap
 
 - Improve audio stability
+- Multi-screen cycling on the OLED add-on (diagnostics / audio meters)
+- Synthetic HD-haptic from basic rumble for games that don't send native haptic data
 
 ## References
 

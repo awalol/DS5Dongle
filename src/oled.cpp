@@ -181,8 +181,13 @@ void render_screen() {
         const uint8_t pwr = interrupt_in_data[52];
         int pct = (pwr & 0x0F) * 10;
         if (pct > 100) pct = 100;
+        const uint8_t pstate = pwr >> 4;
+        char marker = ' ';
+        if (pstate == 1) marker = '+';      // Charging
+        else if (pstate == 2) marker = '*'; // Complete
+        else if (pstate >= 0xA) marker = '!'; // Error
         char bbuf[16];
-        snprintf(bbuf, sizeof(bbuf), "Batt:%3d%%", pct);
+        snprintf(bbuf, sizeof(bbuf), "Batt:%3d%%%c", pct, marker);
         draw_text(0, 18, bbuf);
         rect_outline(64, 18, 64, 7);
         int fill = (pct * 60) / 100;
@@ -198,18 +203,44 @@ void render_screen() {
         int ry = 32 + (interrupt_in_data[3] * 27) / 255;
         rect_filled(rx - 1, ry - 1, 3, 3);
 
+        // L2/R2 analog trigger bars (vertical, fill from bottom)
+        rect_outline(32, 33, 4, 29);
+        const int l2_fill = (interrupt_in_data[4] * 27) / 255;
+        if (l2_fill > 0) rect_filled(33, 61 - l2_fill, 2, l2_fill);
+        rect_outline(92, 33, 4, 29);
+        const int r2_fill = (interrupt_in_data[5] * 27) / 255;
+        if (r2_fill > 0) rect_filled(93, 61 - r2_fill, 2, r2_fill);
+
         const uint8_t b7 = interrupt_in_data[7];
         const uint8_t b8 = interrupt_in_data[8];
-        const int cx = 64;
-        const int cy = 46;
-        auto sq = [&](int dx, int dy, bool on) {
-            if (on) rect_filled(cx + dx - 2, cy + dy - 2, 5, 5);
-            else    rect_outline(cx + dx - 2, cy + dy - 2, 5, 5);
+
+        // D-pad indicator (4 directions; lit for primary + diagonals)
+        const int dp = b7 & 0x0F;
+        const bool dp_n = (dp == 7 || dp == 0 || dp == 1);
+        const bool dp_e = (dp == 1 || dp == 2 || dp == 3);
+        const bool dp_s = (dp == 3 || dp == 4 || dp == 5);
+        const bool dp_w = (dp == 5 || dp == 6 || dp == 7);
+        const int dcx = 46, dcy = 46;
+        auto dot = [&](int dx, int dy, bool on) {
+            if (on) rect_filled(dcx + dx - 1, dcy + dy - 1, 3, 3);
+            else    rect_outline(dcx + dx - 1, dcy + dy - 1, 3, 3);
         };
-        sq(0,  -8, b7 & 0x80); // Triangle
-        sq(8,   0, b7 & 0x40); // Circle
-        sq(0,   8, b7 & 0x20); // Cross
-        sq(-8,  0, b7 & 0x10); // Square
+        dot(0,  -5, dp_n);
+        dot(5,   0, dp_e);
+        dot(0,   5, dp_s);
+        dot(-5,  0, dp_w);
+
+        const int fcx = 64, fcy = 46;
+        auto sq = [&](int dx, int dy, bool on) {
+            if (on) rect_filled(fcx + dx - 2, fcy + dy - 2, 5, 5);
+            else    rect_outline(fcx + dx - 2, fcy + dy - 2, 5, 5);
+        };
+        // shift face buttons right so they don't collide with d-pad
+        const int fcx_off = 18;
+        sq(fcx_off + 0,  -8, b7 & 0x80); // Triangle
+        sq(fcx_off + 8,   0, b7 & 0x40); // Circle
+        sq(fcx_off + 0,   8, b7 & 0x20); // Cross
+        sq(fcx_off - 8,   0, b7 & 0x10); // Square
 
         if (b8 & 0x01) rect_filled(36, 30, 12, 3); else rect_outline(36, 30, 12, 3); // L1
         if (b8 & 0x02) rect_filled(80, 30, 12, 3); else rect_outline(80, 30, 12, 3); // R1
