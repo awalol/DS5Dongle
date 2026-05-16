@@ -87,6 +87,7 @@ add_executable(ds5-bridge
         src/bt.cpp
         src/config.cpp
         src/cmd.cpp
+        src/oled.cpp
 )
 
 if (ENABLE_BATT_LED)
@@ -166,6 +167,7 @@ target_link_libraries(ds5-bridge
         hardware_watchdog
         hardware_timer
         hardware_flash
+        hardware_spi
         pico_btstack_classic
 #        pico_cyw43_arch_threadsafe_background
         pico_cyw43_arch_poll

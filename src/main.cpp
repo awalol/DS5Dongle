@@ -20,6 +20,7 @@
 #if ENABLE_BATT_LED
 #include "battery_led.h"
 #endif
+#include "oled.h"
 
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
@@ -42,6 +43,23 @@ critical_section_t report_cs;
 volatile bool report_dirty = false;
 
 void interrupt_loop() {
+    // Reboot combo: hold PS + Mute for 2 seconds. Works whether or not the
+    // OLED add-on is present. PS+Mute is uncommon during gameplay and the
+    // long hold avoids accidental triggers.
+    {
+        static uint32_t combo_first_us = 0;
+        constexpr uint8_t kComboBits = 0x05;       // byte 9: PS (bit 0) + Mute (bit 2)
+        constexpr uint32_t kComboHoldUs = 2000000; // 2 seconds
+        const bool held = (interrupt_in_data[9] & kComboBits) == kComboBits;
+        if (held) {
+            const uint32_t now = time_us_32();
+            if (combo_first_us == 0) combo_first_us = now;
+            else if ((now - combo_first_us) > kComboHoldUs) watchdog_reboot(0, 0, 0);
+        } else {
+            combo_first_us = 0;
+        }
+    }
+
     if (!tud_hid_ready()) return;
 
     // TODO: Refactor for better code reuse
@@ -243,6 +261,7 @@ int main() {
     bt_register_data_callback(on_bt_data);
 
     audio_init();
+    oled_init();
 
 #if !ENABLE_SERIAL
     watchdog_enable(1000, true);
@@ -256,6 +275,7 @@ int main() {
         tud_task();
         audio_loop();
         interrupt_loop();
+        oled_loop();
 #if ENABLE_BATT_LED
         battery_led_tick();
 #endif
