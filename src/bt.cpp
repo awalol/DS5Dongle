@@ -54,6 +54,21 @@ void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
 }
 
+// Accessors used by the optional OLED add-on.
+bool bt_is_connected() {
+    return hid_interrupt_cid != 0;
+}
+
+void bt_get_addr(uint8_t out[6]) {
+    memcpy(out, current_device_addr, 6);
+}
+
+// Stub kept for OLED diag-screen compatibility. This fork does not wrap
+// hci_send_cmd in an error-counting macro, so the counter is always 0.
+uint32_t bt_hci_err_count() {
+    return 0;
+}
+
 void bt_send_packet(uint8_t *data, uint16_t len) {
     if (hid_interrupt_cid != 0) {
         l2cap_send(hid_interrupt_cid, data, len);

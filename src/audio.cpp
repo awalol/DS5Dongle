@@ -44,6 +44,11 @@ void set_headset(bool state) {
     plug_headset = state;
 }
 
+// Stubs kept for OLED diag-screen compatibility. Upstream removed the opus
+// queue and audio FIFO drop tracking isn't wired here; OLED shows 0.
+uint32_t audio_fifo_drops() { return 0; }
+uint32_t opus_fifo_drops() { return 0; }
+
 void audio_loop() {
     // 1. 读取 USB 音频数据
     if (!tud_audio_available()) return;
