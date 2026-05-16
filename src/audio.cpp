@@ -30,6 +30,11 @@ static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
 static bool plug_headset = false;
+static uint32_t g_audio_drops = 0;
+static uint32_t g_opus_drops = 0;
+
+uint32_t audio_fifo_drops() { return g_audio_drops; }
+uint32_t opus_fifo_drops() { return g_opus_drops; }
 alignas(8) static uint32_t audio_core1_stack[8192];
 queue_t audio_fifo;
 queue_t opus_fifo;
@@ -79,6 +84,7 @@ void audio_loop() {
             memcpy(element.data,audio_buf,512 * 2 * 4);
             if (queue_is_full(&audio_fifo)){
                 queue_try_remove(&audio_fifo,NULL);
+                g_audio_drops++;
             }
             if (!queue_try_add(&audio_fifo,&element)) {
                 printf("[Audio] Warning: audio_fifo add failed\n");
@@ -190,6 +196,7 @@ void core1_entry() {
         }
         if (queue_is_full(&opus_fifo)) {
             queue_try_remove(&opus_fifo, NULL);
+            g_opus_drops++;
         }
         if (!queue_try_add(&opus_fifo, &elem)) {
             printf("[Audio] Warning: opus_fifo add failed\n");

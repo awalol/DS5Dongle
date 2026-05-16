@@ -23,9 +23,15 @@
 
 #define MTU 672
 
+static uint32_t g_hci_err_count = 0;
+uint32_t bt_hci_err_count() { return g_hci_err_count; }
+
 #define HCI_LOG_CMD(...) do { \
     uint8_t _err = hci_send_cmd(__VA_ARGS__); \
-    if (_err) printf("[HCI] hci_send_cmd failed err=0x%02X\n", _err); \
+    if (_err) { \
+        g_hci_err_count++; \
+        printf("[HCI] hci_send_cmd failed err=0x%02X\n", _err); \
+    } \
 } while (0)
 
 using std::unordered_map;

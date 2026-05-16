@@ -26,5 +26,6 @@ void set_feature_data(uint8_t reportId, const uint8_t* data, uint16_t len);
 
 bool bt_is_connected();
 void bt_get_addr(uint8_t out[6]);
+uint32_t bt_hci_err_count();
 
 #endif //DS5_BRIDGE_BT_H

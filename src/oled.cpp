@@ -1,6 +1,7 @@
 #include "oled.h"
 #include "oled_font.h"
 #include "bt.h"
+#include "audio.h"
 
 #include <cstdio>
 #include <cstring>
@@ -34,6 +35,17 @@ bool key1_prev = true;
 uint32_t key0_t_us = 0;
 uint32_t key1_t_us = 0;
 constexpr uint32_t kDebounceUs = 20000;
+
+constexpr int kNumScreens = 3;
+int current_screen = 0;
+
+uint32_t rumble_off_at_us = 0;
+bool rumble_active = false;
+constexpr uint32_t kRumbleBurstUs = 250000;
+
+int trigger_preset = 0;
+const char* const kTrigPresetNames[] = {"Off", "Feedback", "Weapon", "Vibration"};
+constexpr int kNumTrigPresets = 4;
 
 void cmd(uint8_t c) {
     gpio_put(kPinDC, 0);
@@ -133,14 +145,81 @@ void draw_text(int x, int y, const char *s) {
     }
 }
 
-void send_test_rumble() {
+void send_rumble(uint8_t amplitude) {
     uint8_t pkt[78] = {};
     pkt[0] = 0x31;
     pkt[1] = 0x00;
     pkt[2] = 0x10;
     pkt[3] = 0x03;
-    pkt[5] = 0xC0;
-    pkt[6] = 0xC0;
+    pkt[5] = amplitude;
+    pkt[6] = amplitude;
+    bt_write(pkt, sizeof(pkt));
+}
+
+void rumble_burst_tick(uint32_t now) {
+    if (rumble_active && (int32_t)(now - rumble_off_at_us) >= 0) {
+        send_rumble(0);
+        rumble_active = false;
+    }
+}
+
+// Trigger effect param format follows dualsensectl's reverse-engineering.
+// Modes 0x21/0x25/0x26 use bitpacked 10-zone arrays, not raw position bytes.
+void send_trigger_effect(int preset) {
+    uint8_t pkt[78] = {};
+    pkt[0] = 0x31;
+    pkt[2] = 0x10;
+    pkt[3] = 0x0C; // valid_flag0: RIGHT_TRIGGER_MOTOR_ENABLE | LEFT_TRIGGER_MOTOR_ENABLE
+
+    uint8_t mode = 0x05; // OFF
+    uint8_t p[9] = {0};
+
+    switch (preset) {
+        case 0: // Off
+            mode = 0x05;
+            break;
+        case 1: { // Feedback — all 10 zones at max strength 8
+            mode = 0x21;
+            const uint16_t active = 0x03FF;
+            uint32_t strength = 0;
+            for (int i = 0; i < 10; i++) strength |= (uint32_t)(7u << (3 * i));
+            p[0] = active & 0xFF;
+            p[1] = (active >> 8) & 0xFF;
+            p[2] = strength & 0xFF;
+            p[3] = (strength >> 8) & 0xFF;
+            p[4] = (strength >> 16) & 0xFF;
+            p[5] = (strength >> 24) & 0xFF;
+            break;
+        }
+        case 2: { // Weapon — snap between positions 3 and 5, force 8
+            mode = 0x25;
+            const uint16_t start_stop = (1u << 3) | (1u << 5);
+            p[0] = start_stop & 0xFF;
+            p[1] = (start_stop >> 8) & 0xFF;
+            p[2] = 7; // force = strength - 1
+            break;
+        }
+        case 3: { // Vibration — all 10 zones at amplitude 8, frequency 30 Hz
+            mode = 0x26;
+            const uint16_t active = 0x03FF;
+            uint32_t strength = 0;
+            for (int i = 0; i < 10; i++) strength |= (uint32_t)(7u << (3 * i));
+            p[0] = active & 0xFF;
+            p[1] = (active >> 8) & 0xFF;
+            p[2] = strength & 0xFF;
+            p[3] = (strength >> 8) & 0xFF;
+            p[4] = (strength >> 16) & 0xFF;
+            p[5] = (strength >> 24) & 0xFF;
+            p[8] = 30; // frequency
+            break;
+        }
+    }
+
+    pkt[13] = mode;
+    for (int i = 0; i < 9; i++) pkt[14 + i] = p[i];
+    pkt[24] = mode;
+    for (int i = 0; i < 9; i++) pkt[25 + i] = p[i];
+
     bt_write(pkt, sizeof(pkt));
 }
 
@@ -150,13 +229,19 @@ void handle_buttons() {
     const bool k1 = gpio_get(kPinKey1);
     if (!k0 && key0_prev && (now - key0_t_us) > kDebounceUs) {
         key0_t_us = now;
-        // KEY0 placeholder: screen flash by inverting
-        for (size_t i = 0; i < sizeof(fb); i++) fb[i] = ~fb[i];
-        flush_fb();
+        current_screen = (current_screen + 1) % kNumScreens;
+        last_render_us = 0;
     }
     if (!k1 && key1_prev && (now - key1_t_us) > kDebounceUs) {
         key1_t_us = now;
-        send_test_rumble();
+        if (current_screen == 2) {
+            trigger_preset = (trigger_preset + 1) % kNumTrigPresets;
+            send_trigger_effect(trigger_preset);
+        } else {
+            send_rumble(0xC0);
+            rumble_active = true;
+            rumble_off_at_us = now + kRumbleBurstUs;
+        }
     }
     key0_prev = k0;
     key1_prev = k1;
@@ -251,6 +336,62 @@ void render_screen() {
     flush_fb();
 }
 
+void render_screen_diag() {
+    fb_clear();
+
+    draw_text(0, 0, "Diagnostics");
+
+    const uint32_t uptime_s = time_us_32() / 1000000u;
+    const uint32_t h = uptime_s / 3600u;
+    const uint32_t m = (uptime_s / 60u) % 60u;
+    const uint32_t s = uptime_s % 60u;
+    char buf[24];
+    snprintf(buf, sizeof(buf), "Up:%luh %02lum %02lus", (unsigned long)h, (unsigned long)m, (unsigned long)s);
+    draw_text(0, 9, buf);
+
+    snprintf(buf, sizeof(buf), "HCI errs:    %lu", (unsigned long)bt_hci_err_count());
+    draw_text(0, 18, buf);
+    snprintf(buf, sizeof(buf), "Aud drops:   %lu", (unsigned long)audio_fifo_drops());
+    draw_text(0, 27, buf);
+    snprintf(buf, sizeof(buf), "Opus drops:  %lu", (unsigned long)opus_fifo_drops());
+    draw_text(0, 36, buf);
+
+    snprintf(buf, sizeof(buf), "BT: %s", bt_is_connected() ? "connected" : "waiting");
+    draw_text(0, 45, buf);
+
+    draw_text(0, 56, "K0=next K1=rumble");
+
+    flush_fb();
+}
+
+void render_screen_triggers() {
+    fb_clear();
+    draw_text(0, 0, "Trigger Test");
+
+    char buf[24];
+    snprintf(buf, sizeof(buf), "Mode: %s", kTrigPresetNames[trigger_preset]);
+    draw_text(0, 12, buf);
+
+    if (bt_is_connected()) {
+        const uint8_t l2 = interrupt_in_data[4];
+        const uint8_t r2 = interrupt_in_data[5];
+        snprintf(buf, sizeof(buf), "L2:%3d  R2:%3d", l2, r2);
+        draw_text(0, 24, buf);
+
+        rect_outline(0, 35, 60, 9);
+        int lfill = (l2 * 56) / 255;
+        if (lfill > 0) rect_filled(2, 37, lfill, 5);
+        rect_outline(68, 35, 60, 9);
+        int rfill = (r2 * 56) / 255;
+        if (rfill > 0) rect_filled(70, 37, rfill, 5);
+    } else {
+        draw_text(0, 24, "(no controller)");
+    }
+
+    draw_text(0, 56, "K0=next K1=cycle");
+    flush_fb();
+}
+
 } // namespace
 
 void oled_init() {
@@ -274,7 +415,12 @@ void oled_init() {
 void oled_loop() {
     handle_buttons();
     const uint32_t now = time_us_32();
+    rumble_burst_tick(now);
     if ((now - last_render_us) < kFrameUs) return;
     last_render_us = now;
-    render_screen();
+    switch (current_screen) {
+        case 0: render_screen();          break;
+        case 1: render_screen_diag();     break;
+        case 2: render_screen_triggers(); break;
+    }
 }
