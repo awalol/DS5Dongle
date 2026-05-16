@@ -18,7 +18,7 @@
 
 #define INPUT_CHANNELS    4
 #define OUTPUT_CHANNELS   2
-#define SAMPLE_SIZE       64
+#define SAMPLE_SIZE       60
 #define REPORT_SIZE       398
 #define REPORT_ID         0x36
 // #define VOLUME_GAIN       2
@@ -37,7 +37,7 @@ static uint8_t opus_buf[200];
 critical_section_t opus_cs;
 
 struct audio_raw_element {
-    float data[512 * 2];
+    float data[480 * 2];
 };
 
 void set_headset(bool state) {
@@ -55,7 +55,7 @@ void audio_loop() {
         return;
     }
 
-    static float audio_buf[512 * 2];
+    static float audio_buf[480 * 2];
     static uint audio_buf_pos = 0;
     // 2. 从4ch中提取ch3/ch4，转换为float输入重采样器
     WDL_ResampleSample *in_buf;
@@ -67,9 +67,9 @@ void audio_loop() {
  #if !DISABLE_SPEAKER_PROC       
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f * audio_gain;
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * audio_gain;
-        if (audio_buf_pos == 512 * 2) {
+        if (audio_buf_pos == 480 * 2) {
             static audio_raw_element element{};
-            memcpy(element.data, audio_buf, 512 * 2 * 4);
+            memcpy(element.data, audio_buf, 480 * 2 * 4);
             if (queue_is_full(&audio_fifo)) {
                 queue_try_remove(&audio_fifo,NULL);
             }
@@ -86,7 +86,7 @@ void audio_loop() {
     }
 
     // 3. 48kHz -> 3kHz 重采样
-    static WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32帧 × 2ch
+    static WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 60 floats = 30帧 × 2ch
     const int out_frames = resampler.ResampleOut(out_buf, nframes, nframes / 4, OUTPUT_CHANNELS);
 
     static int8_t haptic_buf[SAMPLE_SIZE];
@@ -147,7 +147,6 @@ void audio_init() {
 }
 
 static OpusEncoder *encoder;
-static WDL_Resampler resampler_audio;
 
 void core1_entry() {
     int error = 0;
@@ -160,25 +159,15 @@ void core1_entry() {
     opus_encoder_ctl(encoder,OPUS_SET_BITRATE(200 * 8 * 100));
     opus_encoder_ctl(encoder,OPUS_SET_VBR(false));
     opus_encoder_ctl(encoder,OPUS_SET_COMPLEXITY(0)); // max 4
-    resampler_audio.SetMode(true, 0, false);
-    resampler_audio.SetRates(51200, 48000);
-    resampler_audio.SetFeedMode(true);
-    resampler_audio.Prealloc(2, 512, 480);
 
     while (true) {
         static audio_raw_element audio_element{};
         queue_remove_blocking(&audio_fifo, &audio_element);
-        // 将 512 frames 重采样成 480 frames 以解决噪音问题。感谢 @Junhoo
-        WDL_ResampleSample *in_buf;
-        int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
-        for (int i = 0; i < nframes * 2; i++) {
-            in_buf[i] = audio_element.data[i];
-        }
-        static WDL_ResampleSample out_buf[480 * 2];
-        resampler_audio.ResampleOut(out_buf, nframes, 480, 2);
 
         static uint8_t out[200];
-        (void) opus_encode_float(encoder, out_buf, 480, out, 200);
+        // Directly encode the exactly 480 frames without resampling
+        (void) opus_encode_float(encoder, audio_element.data, 480, out, 200);
+        
         critical_section_enter_blocking(&opus_cs);
         memcpy(opus_buf, out, 200);
         critical_section_exit(&opus_cs);
