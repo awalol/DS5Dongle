@@ -36,7 +36,7 @@ uint32_t key0_t_us = 0;
 uint32_t key1_t_us = 0;
 constexpr uint32_t kDebounceUs = 20000;
 
-constexpr int kNumScreens = 3;
+constexpr int kNumScreens = 5;
 int current_screen = 0;
 
 uint32_t rumble_off_at_us = 0;
@@ -44,8 +44,8 @@ bool rumble_active = false;
 constexpr uint32_t kRumbleBurstUs = 250000;
 
 int trigger_preset = 0;
-const char* const kTrigPresetNames[] = {"Off", "Feedback", "Weapon", "Vibration"};
-constexpr int kNumTrigPresets = 4;
+const char* const kTrigPresetNames[] = {"Off", "Feedback", "Weapon", "Vibration", "Bow", "Gallop", "Machine"};
+constexpr int kNumTrigPresets = 7;
 
 void cmd(uint8_t c) {
     gpio_put(kPinDC, 0);
@@ -210,7 +210,37 @@ void send_trigger_effect(int preset) {
             p[3] = (strength >> 8) & 0xFF;
             p[4] = (strength >> 16) & 0xFF;
             p[5] = (strength >> 24) & 0xFF;
-            p[8] = 30; // frequency
+            p[8] = 30;
+            break;
+        }
+        case 4: { // Bow — drawing resistance + snap at position 6
+            mode = 0x22;
+            const uint16_t start_stop = (1u << 2) | (1u << 6);
+            const uint8_t force_pair = 7u | (7u << 3); // strength=8, snap=8
+            p[0] = start_stop & 0xFF;
+            p[1] = (start_stop >> 8) & 0xFF;
+            p[2] = force_pair;
+            break;
+        }
+        case 5: { // Galloping
+            mode = 0x23;
+            const uint16_t start_stop = (1u << 0) | (1u << 9);
+            const uint8_t ratio = (5u & 0x07) | ((1u & 0x07) << 3);
+            p[0] = start_stop & 0xFF;
+            p[1] = (start_stop >> 8) & 0xFF;
+            p[2] = ratio;
+            p[3] = 5; // frequency
+            break;
+        }
+        case 6: { // Machine gun
+            mode = 0x27;
+            const uint16_t start_stop = (1u << 1) | (1u << 8);
+            const uint8_t force_pair = 7u | (7u << 3);
+            p[0] = start_stop & 0xFF;
+            p[1] = (start_stop >> 8) & 0xFF;
+            p[2] = force_pair;
+            p[3] = 20; // frequency
+            p[4] = 0;  // period
             break;
         }
     }
@@ -392,6 +422,89 @@ void render_screen_triggers() {
     flush_fb();
 }
 
+void render_screen_gyro() {
+    fb_clear();
+    draw_text(0, 0, "Gyro Tilt");
+    if (bt_is_connected()) {
+        int16_t ax, ay, az;
+        memcpy(&ax, &interrupt_in_data[21], 2);
+        memcpy(&ay, &interrupt_in_data[23], 2);
+        memcpy(&az, &interrupt_in_data[25], 2);
+        char buf[16];
+        snprintf(buf, sizeof(buf), "X%+5d", ax); draw_text(0,  10, buf);
+        snprintf(buf, sizeof(buf), "Y%+5d", ay); draw_text(44, 10, buf);
+        snprintf(buf, sizeof(buf), "Z%+5d", az); draw_text(88, 10, buf);
+
+        const int bx = 44, by = 22, bw = 40, bh = 40;
+        rect_outline(bx, by, bw, bh);
+        for (int x = bx + 1; x < bx + bw - 1; x++) px(x, by + bh / 2, true);
+        for (int y = by + 1; y < by + bh - 1; y++) px(bx + bw / 2, y, true);
+        int dx = ((int)ax * (bw / 2 - 3)) / 8192;
+        int dy = ((int)ay * (bh / 2 - 3)) / 8192;
+        int cx = bx + bw / 2 + dx;
+        int cy = by + bh / 2 + dy;
+        if (cx < bx + 2) cx = bx + 2;
+        if (cx > bx + bw - 3) cx = bx + bw - 3;
+        if (cy < by + 2) cy = by + 2;
+        if (cy > by + bh - 3) cy = by + bh - 3;
+        rect_filled(cx - 1, cy - 1, 3, 3);
+    } else {
+        draw_text(0, 30, "(no controller)");
+    }
+    flush_fb();
+}
+
+void render_screen_touchpad() {
+    fb_clear();
+    draw_text(0, 0, "Touchpad");
+    if (bt_is_connected()) {
+        rect_outline(4, 12, 120, 30);
+        int active = 0;
+        for (int finger = 0; finger < 2; finger++) {
+            const int off = 32 + finger * 4;
+            const uint32_t f = (uint32_t)interrupt_in_data[off] |
+                               ((uint32_t)interrupt_in_data[off + 1] << 8) |
+                               ((uint32_t)interrupt_in_data[off + 2] << 16) |
+                               ((uint32_t)interrupt_in_data[off + 3] << 24);
+            const bool not_touching = (f >> 7) & 1u;
+            if (not_touching) continue;
+            const uint16_t fx = (f >> 8) & 0xFFFu;
+            const uint16_t fy = (f >> 20) & 0xFFFu;
+            int sx = 5 + ((int)fx * 114) / 1919;
+            int sy = 13 + ((int)fy * 26) / 1079;
+            if (sx < 5)   sx = 5;
+            if (sx > 122) sx = 122;
+            if (sy < 13)  sy = 13;
+            if (sy > 40)  sy = 40;
+            rect_filled(sx - 1, sy - 1, 3, 3);
+            active++;
+        }
+        char buf[20];
+        snprintf(buf, sizeof(buf), "Fingers: %d", active);
+        draw_text(0, 46, buf);
+    } else {
+        draw_text(0, 30, "(no controller)");
+    }
+    draw_text(0, 56, "K0=next");
+    flush_fb();
+}
+
+void boot_splash() {
+    fb_clear();
+    auto cx_for = [](const char* s) {
+        int n = 0; while (s[n]) n++;
+        return (128 - (n * 6 - 1)) / 2;
+    };
+    const char* l1 = "DS5 Bridge";
+    const char* l2 = "v0.5.4";
+    const char* l3 = "Pico2W + OLED";
+    draw_text(cx_for(l1), 16, l1);
+    draw_text(cx_for(l2), 30, l2);
+    draw_text(cx_for(l3), 44, l3);
+    flush_fb();
+    sleep_ms(1500);
+}
+
 } // namespace
 
 void oled_init() {
@@ -409,7 +522,7 @@ void oled_init() {
     hw_reset();
     sh1107_init();
     fb_clear();
-    flush_fb();
+    boot_splash();
 }
 
 void oled_loop() {
@@ -419,8 +532,10 @@ void oled_loop() {
     if ((now - last_render_us) < kFrameUs) return;
     last_render_us = now;
     switch (current_screen) {
-        case 0: render_screen();          break;
-        case 1: render_screen_diag();     break;
-        case 2: render_screen_triggers(); break;
+        case 0: render_screen();           break;
+        case 1: render_screen_diag();      break;
+        case 2: render_screen_triggers();  break;
+        case 3: render_screen_gyro();      break;
+        case 4: render_screen_touchpad();  break;
     }
 }
