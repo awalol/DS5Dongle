@@ -10,6 +10,7 @@
 #include "audio.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
+#include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
 
 static uint8_t reportSeqCounter = 0;
@@ -112,10 +113,13 @@ int main() {
 
     audio_init();
 
+    watchdog_enable(8000, 1);
+
     while (1) {
         cyw43_arch_poll();
         tud_task();
         audio_loop();
         interrupt_loop();
+        watchdog_update();
     }
 }

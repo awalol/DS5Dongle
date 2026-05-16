@@ -23,6 +23,11 @@
 
 #define MTU 672
 
+#define HCI_LOG_CMD(...) do { \
+    uint8_t _err = hci_send_cmd(__VA_ARGS__); \
+    if (_err) printf("[HCI] hci_send_cmd failed err=0x%02X\n", _err); \
+} while (0)
+
 using std::unordered_map;
 using std::vector;
 using std::queue;
@@ -65,7 +70,7 @@ bool bt_disconnect() {
     }
 
     // 0x13 = remote user terminated connection
-    hci_send_cmd(&hci_disconnect, acl_handle, 0x13);
+    HCI_LOG_CMD(&hci_disconnect, acl_handle, 0x13);
     return true;
 }
 
@@ -155,7 +160,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (device_found) {
                 printf("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
-                hci_send_cmd(&hci_create_connection, current_device_addr,
+                HCI_LOG_CMD(&hci_create_connection, current_device_addr,
                              hci_usable_acl_packet_types(), 0, 0, 0, 1);
             }
             break;
@@ -188,7 +193,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
                 printf("[HCI] ACL connected handle=0x%04X\n", handle);
                 printf("[HCI] Request authentication on handle=0x%04X\n", handle);
-                hci_send_cmd(&hci_authentication_requested, handle);
+                HCI_LOG_CMD(&hci_authentication_requested, handle);
             } else {
                 device_found = false;
                 new_pair = false;
@@ -207,10 +212,10 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (link) {
                 printf("[HCI] Link key request from %s, reply stored key type=%u\n", bd_addr_to_str(addr),
                        (unsigned int) link_key_type);
-                hci_send_cmd(&hci_link_key_request_reply, addr, link_key);
+                HCI_LOG_CMD(&hci_link_key_request_reply, addr, link_key);
             } else {
                 printf("[HCI] Link key request from %s, no key, force re-pair\n", bd_addr_to_str(addr));
-                hci_send_cmd(&hci_link_key_request_negative_reply, addr);
+                HCI_LOG_CMD(&hci_link_key_request_negative_reply, addr);
             }
             break;
         }
@@ -219,7 +224,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             bd_addr_t addr;
             hci_event_user_confirmation_request_get_bd_addr(packet, addr);
             printf("[HCI] User confirmation request from %s, accept\n", bd_addr_to_str(addr));
-            hci_send_cmd(&hci_user_confirmation_request_reply, addr);
+            HCI_LOG_CMD(&hci_user_confirmation_request_reply, addr);
             break;
         }
 
@@ -240,7 +245,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 gap_drop_link_key_for_bd_addr(current_device_addr);
                 gap_inquiry_start(30);
             } else {
-                hci_send_cmd(&hci_set_connection_encryption, handle, 1);
+                HCI_LOG_CMD(&hci_set_connection_encryption, handle, 1);
             }
             break;
         }
@@ -273,7 +278,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
                 gap_inquiry_stop();
-                hci_send_cmd(&hci_accept_connection_request, addr, 0x01);
+                HCI_LOG_CMD(&hci_accept_connection_request, addr, 0x01);
             }
             break;
         }

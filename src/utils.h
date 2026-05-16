@@ -103,6 +103,7 @@ inline uint32_t crc32(const uint8_t* data, size_t size) {
 
 inline void fill_output_report_checksum(uint8_t* outputData,size_t len)
 {
+    if (len < 4) return;
     uint32_t crc = crc32(outputData, len - 4);
     outputData[len - 4] = (crc >> 0) & 0xFF;
     outputData[len - 3] = (crc >> 8) & 0xFF;
@@ -124,6 +125,7 @@ inline uint32_t crc32_feature(const uint8_t *data, std::size_t size) {
 }
 
 inline void fill_feature_report_checksum(uint8_t *data, const size_t len) {
+    if (len < 4) return;
     uint32_t crc = crc32_feature(data,len - 4);
     data[len - 4] = (crc >> 0) & 0xFF;
     data[len - 3] = (crc >> 8) & 0xFF;
