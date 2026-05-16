@@ -36,8 +36,10 @@ uint32_t key0_t_us = 0;
 uint32_t key1_t_us = 0;
 constexpr uint32_t kDebounceUs = 20000;
 
-constexpr int kNumScreens = 5;
+constexpr int kNumScreens = 6;
 int current_screen = 0;
+
+uint8_t lb_r = 0, lb_g = 0, lb_b = 0;
 
 uint32_t rumble_off_at_us = 0;
 bool rumble_active = false;
@@ -253,6 +255,8 @@ void send_trigger_effect(int preset) {
     bt_write(pkt, sizeof(pkt));
 }
 
+void send_lightbar_color(uint8_t r, uint8_t g, uint8_t b);
+
 void handle_buttons() {
     const uint32_t now = time_us_32();
     const bool k0 = gpio_get(kPinKey0);
@@ -267,6 +271,8 @@ void handle_buttons() {
         if (current_screen == 2) {
             trigger_preset = (trigger_preset + 1) % kNumTrigPresets;
             send_trigger_effect(trigger_preset);
+        } else if (current_screen == 5) {
+            send_lightbar_color(lb_r, lb_g, lb_b);
         } else {
             send_rumble(0xC0);
             rumble_active = true;
@@ -489,6 +495,52 @@ void render_screen_touchpad() {
     flush_fb();
 }
 
+void send_lightbar_color(uint8_t r, uint8_t g, uint8_t b) {
+    uint8_t pkt[78] = {};
+    pkt[0] = 0x31;
+    pkt[2] = 0x10;
+    pkt[4] = 0x04; // valid_flag1: LIGHTBAR_CONTROL_ENABLE (bit 2)
+    pkt[47] = r;   // lightbar_red
+    pkt[48] = g;   // lightbar_green
+    pkt[49] = b;   // lightbar_blue
+    bt_write(pkt, sizeof(pkt));
+}
+
+void render_screen_lightbar() {
+    fb_clear();
+    draw_text(0, 0, "Lightbar");
+    if (bt_is_connected()) {
+        int16_t ax, ay, az;
+        memcpy(&ax, &interrupt_in_data[21], 2);
+        memcpy(&ay, &interrupt_in_data[23], 2);
+        memcpy(&az, &interrupt_in_data[25], 2);
+        const int rr = ((int)ax + 8192) * 255 / 16384;
+        const int gg = ((int)ay + 8192) * 255 / 16384;
+        const int bb = ((int)az + 8192) * 255 / 16384;
+        lb_r = (uint8_t)(rr < 0 ? 0 : rr > 255 ? 255 : rr);
+        lb_g = (uint8_t)(gg < 0 ? 0 : gg > 255 ? 255 : gg);
+        lb_b = (uint8_t)(bb < 0 ? 0 : bb > 255 ? 255 : bb);
+
+        char buf[16];
+        snprintf(buf, sizeof(buf), "R:%3u", lb_r); draw_text(0,  12, buf);
+        snprintf(buf, sizeof(buf), "G:%3u", lb_g); draw_text(44, 12, buf);
+        snprintf(buf, sizeof(buf), "B:%3u", lb_b); draw_text(88, 12, buf);
+
+        // Three intensity bars below each label
+        const int by = 22, bh = 8;
+        rect_outline(0,  by, 40, bh); int rf = (lb_r * 36) / 255; if (rf > 0) rect_filled(2,  by + 2, rf, bh - 4);
+        rect_outline(44, by, 40, bh); int gf = (lb_g * 36) / 255; if (gf > 0) rect_filled(46, by + 2, gf, bh - 4);
+        rect_outline(88, by, 40, bh); int bf = (lb_b * 36) / 255; if (bf > 0) rect_filled(90, by + 2, bf, bh - 4);
+
+        draw_text(0, 38, "Tilt X/Y/Z");
+        draw_text(0, 48, "K1=apply color");
+    } else {
+        draw_text(0, 30, "(no controller)");
+    }
+    draw_text(0, 56, "K0=next");
+    flush_fb();
+}
+
 void boot_splash() {
     fb_clear();
     auto cx_for = [](const char* s) {
@@ -537,5 +589,6 @@ void oled_loop() {
         case 2: render_screen_triggers();  break;
         case 3: render_screen_gyro();      break;
         case 4: render_screen_touchpad();  break;
+        case 5: render_screen_lightbar();  break;
     }
 }
