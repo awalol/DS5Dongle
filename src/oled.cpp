@@ -532,12 +532,14 @@ void render_screen_lightbar() {
         rect_outline(44, by, 40, bh); int gf = (lb_g * 36) / 255; if (gf > 0) rect_filled(46, by + 2, gf, bh - 4);
         rect_outline(88, by, 40, bh); int bf = (lb_b * 36) / 255; if (bf > 0) rect_filled(90, by + 2, bf, bh - 4);
 
-        draw_text(0, 38, "Tilt X/Y/Z");
-        draw_text(0, 48, "K1=apply color");
+        draw_text(0, 38, "Tilt X/Y/Z = R/G/B");
+        draw_text(0, 48, "LIVE preview!");
+
+        send_lightbar_color(lb_r, lb_g, lb_b);
     } else {
         draw_text(0, 30, "(no controller)");
     }
-    draw_text(0, 56, "K0=next");
+    draw_text(0, 56, "K0=next K1=lock");
     flush_fb();
 }
 
