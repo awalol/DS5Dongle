@@ -17,6 +17,7 @@
 #include "classic/sdp_server.h"
 #include "config.h"
 #include "state_mgr.h"
+#include "usb.h"
 #include "pico/util/queue.h"
 #if ENABLE_BATT_LED
 #include "battery_led.h"
@@ -113,9 +114,6 @@ int bt_init() {
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_YES_NO);
     gap_ssp_set_authentication_requirement(SSP_IO_AUTHREQ_MITM_PROTECTION_NOT_REQUIRED_GENERAL_BONDING);
 
-    gap_connectable_control(1);
-    gap_discoverable_control(1);
-
     hci_event_callback_registration.callback = &hci_packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
 
@@ -149,7 +147,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             printf("[BT] State: %u\n", state);
             if (state == HCI_STATE_WORKING) {
                 printf("[BT] Stack ready, start inquiry\n");
-                gap_inquiry_start(30);
+                bt_scan_start();
             }
             break;
         }
@@ -175,7 +173,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 printf("[HCI] Gamepad found: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int) cod);
                 bd_addr_copy(current_device_addr, addr);
                 device_found = true;
-                gap_inquiry_stop();
+                bt_scan_stop();
             }
             break;
         }
@@ -192,9 +190,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             }
             if (event_type == HCI_EVENT_INQUIRY_COMPLETE) {
                 printf("[HCI] Restart inquiry\n");
-                gap_inquiry_start(30);
-                gap_connectable_control(1);
-                gap_discoverable_control(1);
+                bt_scan_start();
             }
             break;
         }
@@ -324,18 +320,13 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             printf("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
-                gap_inquiry_stop();
+                bt_scan_stop();
                 hci_send_cmd(&hci_accept_connection_request, addr, 0x01);
             }
             break;
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
-#if !ENABLE_SERIAL
-            tud_disconnect();
-#endif
-            gap_connectable_control(1);
-            gap_discoverable_control(1);
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
             device_found = false;
             new_pair = false;
@@ -350,6 +341,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 #endif
             printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
             gap_inquiry_start(30);
+            if (usb_is_sleep()) {
+                printf("[HCI] Disconnected reason=0x%02X, no start inquiry because usb sleep\n", reason);
+            } else {
+                printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
+                bt_scan_start();
+#if !ENABLE_SERIAL
+                tud_disconnect();
+#endif
+            }
             break;
         }
 
@@ -439,7 +439,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     hid_control_cid = local_cid;
 
                     const auto mtu = l2cap_get_remote_mtu_for_local_cid(hid_control_cid);
-                    printf("[L2CAP] Remote Control MTU: %d\n",mtu);
+                    printf("[L2CAP] Remote Control MTU: %d\n", mtu);
                 } else if (psm == PSM_HID_INTERRUPT) {
                     printf("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
                     hid_interrupt_cid = local_cid;
@@ -458,11 +458,11 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     report32[1] = 0x10; // reportSeqCounter
                     report32[2] = 0x10 | 0 << 6 | 1 << 7;
                     report32[3] = 0x3f; // 63 bytes
-                    state_set(report32 + 4,sizeof(SetStateData));
+                    state_set(report32 + 4, sizeof(SetStateData));
                     bt_write(report32, sizeof(report32));
 
                     const auto mtu = l2cap_get_remote_mtu_for_local_cid(hid_interrupt_cid);
-                    printf("[L2CAP] Remote Interrupt MTU: %d\n",mtu);
+                    printf("[L2CAP] Remote Interrupt MTU: %d\n", mtu);
 
                     gap_connectable_control(false);
                     gap_discoverable_control(false);
@@ -585,6 +585,22 @@ void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
         printf_hexdump(get_feature, len + 2);
 #endif
     }
+}
+
+bool bt_connected() {
+    return hid_interrupt_cid != 0;
+}
+
+void bt_scan_start() {
+    gap_connectable_control(true);
+    gap_discoverable_control(true);
+    gap_inquiry_start(30);
+}
+
+void bt_scan_stop() {
+    gap_connectable_control(false);
+    gap_discoverable_control(false);
+    gap_inquiry_stop();
 }
 
 void init_feature() {

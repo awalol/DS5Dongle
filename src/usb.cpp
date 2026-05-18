@@ -2,12 +2,13 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include "bt.h"
 #include "tusb.h"
 #include "bsp/board_api.h"
 #include "config.h"
 
 uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
-float volume[2] = {-100.0f,0.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
+float volume[2] = {-100.0f, 0.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
 
 #define UAC1_ENTITY_SPK_FEATURE_UNIT    0x02
 #define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05
@@ -122,7 +123,7 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
                             if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
                                 min[0] = 0x00;
                                 min[1] = 0x9c;
-                            }else {
+                            } else {
                                 min[0] = 0x00;
                                 min[1] = 0x00;
                             }
@@ -135,7 +136,7 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
                             if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
                                 max[0] = 0x00;
                                 max[1] = 0x00;
-                            }else {
+                            } else {
                                 max[0] = 0x00;
                                 max[1] = 0x30;
                             }
@@ -148,7 +149,7 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
                             if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
                                 res[0] = 0x00;
                                 res[1] = 0x01;
-                            }else {
+                            } else {
                                 res[0] = 0x7a;
                                 res[1] = 0x00;
                             }
@@ -188,4 +189,56 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
     (void) instance;
     (void) len;
+}
+
+bool sleep = false;
+
+bool usb_is_sleep() {
+    return sleep;
+}
+
+void tud_mount_cb(void) {
+    // When USB is mounted, it may indicate either power-on or connection to the controller.
+    // However, actual testing shows that power-on triggers tud_resume_cb.
+    printf("[USB] invoke tud_mount_cb\n");
+    sleep = false;
+    if (bt_connected()) {
+        return;
+    }
+    printf("[USB] tud_mount_cb: bt_scan_start and tud_disconnect\n");
+    bt_scan_start();
+    tud_disconnect();
+}
+
+void tud_umount_cb(void) {
+    // In actual testing, power-off triggers tud_suspend_cb. So far, no tud_umount_cb has been observed.
+    printf("[USB] invoke tud_umount_cb\n");
+    sleep = true;
+    if (bt_connected()) {
+        bt_disconnect();
+    }
+    bt_disconnect();
+    bt_scan_stop();
+}
+
+void tud_suspend_cb(bool remote_wakeup_en) {
+    // When USB enters sleep mode, disconnect the Bluetooth connection from the controller,
+    // but keep the USB connected, in order to trigger tud_resume_cb.
+    (void) remote_wakeup_en;
+
+    printf("[USB] invoke tud_suspend_cb\n");
+    sleep = true;
+    if (bt_connected()) {
+        bt_disconnect();
+    }
+    printf("[USB] tud_suspend_cb: bt_scan_stop\n");
+    bt_scan_stop();
+}
+
+void tud_resume_cb(void) {
+    printf("[USB] invoke tud_resume_cb\n");
+    printf("[USB] tud_resume_cb: bt_scan_start and tud_disconnect\n");
+    sleep = false;
+    bt_scan_start();
+    tud_disconnect();
 }
