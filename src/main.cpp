@@ -82,12 +82,34 @@ void interrupt_loop() {
     }
 }
 
+static void maybe_power_off_controller(const uint8_t *hid_input, uint16_t len) {
+    if (len < 10) return;
+
+    const bool triangle_pressed = (hid_input[7] & 0x80) != 0;
+    const bool ps_pressed = (hid_input[9] & 0x01) != 0;
+    static bool combo_active = false;
+
+    if (triangle_pressed && ps_pressed) {
+        if (!combo_active) {
+            combo_active = true;
+            if (bt_connected()) {
+                printf("[BT] PS+Triangle detected, disconnecting controller to power it off\n");
+                bt_disconnect();
+            }
+        }
+    } else {
+        combo_active = false;
+    }
+}
+
 void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
     if (channel == INTERRUPT && data[1] == 0x31) {
         if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
             set_headset(data[56] & 1);
         }
+
+        maybe_power_off_controller(data + 3, len - 3);
 
         // Wake-on-PS must observe every BT input report regardless of polling
         // mode: the wake feature has its own state to maintain (button-byte

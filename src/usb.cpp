@@ -192,14 +192,13 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
 }
 
 bool sleep = false;
+bool prev_sleep = false;  // Track previous sleep state to detect transitions
 
 bool usb_is_sleep() {
     return sleep;
 }
 
-void tud_mount_cb(void) {
-    // When USB is mounted, it may indicate either power-on or connection to the controller.
-    // However, actual testing shows that power-on triggers tud_resume_cb.
+void usb_on_mount() {
     printf("[USB] invoke tud_mount_cb\n");
     sleep = false;
     if (bt_connected()) {
@@ -210,35 +209,79 @@ void tud_mount_cb(void) {
     tud_disconnect();
 }
 
-void tud_umount_cb(void) {
+void usb_on_umount() {
     // In actual testing, power-off triggers tud_suspend_cb. So far, no tud_umount_cb has been observed.
     printf("[USB] invoke tud_umount_cb\n");
-    sleep = true;
-    if (bt_connected()) {
-        bt_disconnect();
+    // Only disconnect when transitioning INTO sleep (not if already sleeping)
+    if (!sleep) {
+        sleep = true;
+        if (bt_connected()) {
+            bt_disconnect();
+        }
     }
-    bt_disconnect();
     bt_scan_stop();
 }
 
-void tud_suspend_cb(bool remote_wakeup_en) {
-    // When USB enters sleep mode, disconnect the Bluetooth connection from the controller,
-    // but keep the USB connected, in order to trigger tud_resume_cb.
+void usb_on_suspend(bool remote_wakeup_en) {
+    // When USB enters sleep mode, turn off the connected controller and
+    // keep the USB attachment alive so the host can still wake via remote wakeup.
     (void) remote_wakeup_en;
 
     printf("[USB] invoke tud_suspend_cb\n");
-    sleep = true;
-    if (bt_connected()) {
-        bt_disconnect();
+    // Only disconnect when transitioning INTO sleep (not if already sleeping)
+    if (!sleep) {
+        sleep = true;
+        if (bt_connected()) {
+            printf("[USB] tud_suspend_cb: Disconnecting controller on sleep transition\n");
+            bt_disconnect();
+        }
     }
+#ifdef ENABLE_WAKE_HID
+    printf("[USB] tud_suspend_cb: bt_scan_start (wake HID enabled)\n");
+    bt_scan_start();
+#else
     printf("[USB] tud_suspend_cb: bt_scan_stop\n");
     bt_scan_stop();
+#endif
+}
+
+void usb_on_resume() {
+    printf("[USB] invoke tud_resume_cb\n");
+    // Only process when transitioning OUT OF sleep
+    if (sleep) {
+        sleep = false;
+        printf("[USB] tud_resume_cb: Woke from sleep\n");
+    }
+    if (!bt_connected()) {
+        bt_scan_start();
+#ifdef ENABLE_WAKE_HID
+        printf("[USB] tud_resume_cb: bt_scan_start\n");
+#else
+        printf("[USB] tud_resume_cb: bt_scan_start and tud_disconnect\n");
+        tud_disconnect();
+#endif
+    } else {
+        printf("[USB] tud_resume_cb: already connected, reconnecting USB\n");
+#if !ENABLE_SERIAL
+        tud_connect();
+#endif
+    }
+}
+
+#ifndef ENABLE_WAKE_HID
+void tud_mount_cb(void) {
+    usb_on_mount();
+}
+
+void tud_umount_cb(void) {
+    usb_on_umount();
+}
+
+void tud_suspend_cb(bool remote_wakeup_en) {
+    usb_on_suspend(remote_wakeup_en);
 }
 
 void tud_resume_cb(void) {
-    printf("[USB] invoke tud_resume_cb\n");
-    printf("[USB] tud_resume_cb: bt_scan_start and tud_disconnect\n");
-    sleep = false;
-    bt_scan_start();
-    tud_disconnect();
+    usb_on_resume();
 }
+#endif

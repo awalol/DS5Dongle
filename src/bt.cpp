@@ -18,6 +18,7 @@
 #include "config.h"
 #include "state_mgr.h"
 #include "usb.h"
+#include "wake.h"
 #include "pico/util/queue.h"
 #if ENABLE_BATT_LED
 #include "battery_led.h"
@@ -350,6 +351,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 #if ENABLE_BATT_LED
             battery_led_on_disconnect();
 #endif
+#ifdef ENABLE_WAKE_HID
+            wake_on_bt_disconnect();
+#endif
             printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
             gap_inquiry_start(30);
             if (usb_is_sleep()) {
@@ -477,7 +481,12 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
                     gap_connectable_control(false);
                     gap_discoverable_control(false);
-                    // tud_connect();
+#if !ENABLE_SERIAL
+                    tud_connect();
+#endif
+#ifdef ENABLE_WAKE_HID
+                    wake_on_bt_connect();
+#endif
                 } else {
                     printf("[L2CAP] Unknown Channel psm: 0x%02X", psm);
                 }
