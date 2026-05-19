@@ -131,6 +131,18 @@ i.e. ***Update TinyUSB in the Pico SDK to the latest version***
 1. ***Update TinyUSB in the Pico SDK to the latest version***
 2. Compile using standard Pico SDK toolchain
 
+## Wake-on-PS (optional)
+
+A `-DENABLE_WAKE_HID=ON` build adds a second HID interface (a boot keyboard) that injects an **F15** keypress when any controller button is pressed while the host is suspended, waking the PC from **S3 sleep**. F15 was chosen because it has no default Windows or app binding — a stray fire never inserts characters or triggers shortcuts.
+
+Scope: **S3 only.** Modern Standby (S0ix) is not supported. To check your machine, run `powercfg /a` — you need "Standby (S3)" listed under available sleep states.
+
+After flashing the wake build:
+
+1. Open Device Manager → the new **HID Keyboard Device** (and its parent **USB Composite Device**) → Properties → Power Management → tick **"Allow this device to wake the computer."**
+2. Verify with `powercfg /devicequery wake_armed`.
+3. Sleep the PC; press any button on the controller; the PC should wake within ~1 s.
+4. After a wake, `powercfg /lastwake` should attribute the wake to the HID Keyboard Device.
 
 ## Roadmap
 - Please check out [DS5Dongle plan](https://github.com/users/awalol/projects/5)
