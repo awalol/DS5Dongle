@@ -24,5 +24,9 @@ void bt_get_signal_strength(int8_t *rssi);
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
 void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len);
+bool bt_disconnect();
+bool bt_connected();
+void bt_scan_start();
+void bt_scan_stop();
 
 #endif //DS5_BRIDGE_BT_H

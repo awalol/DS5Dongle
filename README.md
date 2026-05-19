@@ -16,6 +16,15 @@ This project enables the Raspberry Pi Pico2W to function as a Bluetooth bridge f
 
 ## Getting Started
 
+### Get the firmware
+
+You have two options:
+
+- **Download a pre-built `.uf2`** — grab the newest
+  [Releases](../../releases) build (`ds5-bridge-*.uf2`). No tools needed.
+- **Build it yourself** — see [Build Instructions](#build-instructions)
+  below (Windows users get a one-command script).
+
 ### Flashing Firmware
 
 1. Hold the BOOTSEL button on the Pico2W
@@ -84,7 +93,40 @@ If your device fails to boot:
 
 ## Build Instructions
 
-To build the project from source:
+### Windows 11 (one command, no WSL)
+
+You don't even need to clone this repo. Download just
+[`tools/build-windows.ps1`](tools/build-windows.ps1) to any folder and run
+it in **PowerShell**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build-windows.ps1
+```
+
+(If you already have a checkout, run `tools\build-windows.ps1` from the
+repo root instead — it detects and uses your local checkout.)
+
+The script installs every prerequisite (CMake, Ninja, Python, Git and the
+ARM GNU toolchain — via `winget`, falling back to portable downloads if
+`winget` is unavailable), clones the project (if not run from a checkout)
+plus the pinned Pico SDK + TinyUSB into `%USERPROFILE%\.ds5-build`, builds
+the firmware, and drops `ds5-bridge.uf2` next to the script and on your
+Desktop. It is safe to re-run; already-installed tools are skipped.
+
+Build a fork or a specific ref with `-Repo <url>` / `-Ref <branch|tag>`.
+
+Build a variant with `-Variant debug` or `-Variant wake`.
+
+### Other platforms
+
+To build from source manually:
+
+1. Install the Pico SDK 2.2.0 and switch its TinyUSB submodule to tag 0.20.0
+i.e. ***Update TinyUSB in the Pico SDK to the latest version***
+2. Initialise this repo's submodules: `git submodule update --init --recursive`
+3. Configure and build with the standard Pico SDK toolchain:
+   `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPICO_SDK_PATH=<sdk>`
+   then `cmake --build build --target ds5-bridge`
 
 1. ***Update TinyUSB in the Pico SDK to the latest version***
 2. Compile using standard Pico SDK toolchain

@@ -1,0 +1,217 @@
+name: Build firmware (reusable)
+
+# Reusable build used by build.yml, release.yml and daily-upstream-release.yml.
+# Always builds the standard and debug UF2s for a given ref; optionally also
+# the Pico W UF2 and a no-batt-led compile check. When `upload_tag` is set the
+# built UF2s are attached to that GitHub Release.
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: owner/name to build. Empty = this repository.
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: Git ref (branch, tag or SHA) to build
+        required: false
+        type: string
+        default: ""
+      version:
+        description: Firmware version string (-DVERSION). Empty = CMake default ("dev")
+        required: false
+        type: string
+        default: ""
+      asset_suffix:
+        description: Suffix added before .uf2 on release assets (e.g. a tag)
+        required: false
+        type: string
+        default: ""
+      upload_tag:
+        description: If set, uploads the built UF2s to this release tag
+        required: false
+        type: string
+        default: ""
+      picow:
+        description: Also build the Pico W UF2 (-DPICO_W_BUILD=ON)
+        required: false
+        type: boolean
+        default: false
+      no_batt_led_check:
+        description: Also compile-check the no-batt-led config (-DENABLE_BATT_LED=OFF)
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PICO_SDK_REF: 2.2.0
+  TINYUSB_REF: 0.20.0
+  PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
+  APT_PACKAGES: >-
+    cmake
+    python3
+    build-essential
+    gcc-arm-none-eabi
+    libnewlib-arm-none-eabi
+    libstdc++-arm-none-eabi-newlib
+    ninja-build
+
+jobs:
+  build:
+    name: Build UF2 artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.repo == '' && github.repository || inputs.repo }}
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+
+      - name: Resolve firmware version
+        env:
+          IN_VER: ${{ inputs.version }}
+        run: |
+          v="$IN_VER"
+          # A full 40-char commit SHA (build.yml passes github.sha) is
+          # shortened to 7 chars, matching the previous build.yml behaviour.
+          if printf '%s' "$v" | grep -qE '^[0-9a-f]{40}$'; then
+            v="${v:0:7}"
+          fi
+          echo "FW_VER=$v" >> "$GITHUB_ENV"
+
+      - name: Prepare build dependency cache
+        id: apt-cache
+        run: |
+          mkdir -p "$RUNNER_TEMP/apt-cache/partial"
+          . /etc/os-release
+          package_hash="$(printf '%s' "$APT_PACKAGES" | sha256sum | cut -d ' ' -f 1)"
+          echo "dir=$RUNNER_TEMP/apt-cache" >> "$GITHUB_OUTPUT"
+          echo "os=${ID}-${VERSION_ID}" >> "$GITHUB_OUTPUT"
+          echo "package-hash=$package_hash" >> "$GITHUB_OUTPUT"
+
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.apt-cache.outputs.dir }}
+          key: ${{ runner.os }}-${{ runner.arch }}-apt-${{ steps.apt-cache.outputs.os }}-${{ steps.apt-cache.outputs.package-hash }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-apt-${{ steps.apt-cache.outputs.os }}-
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -o Dir::Cache::archives="${{ steps.apt-cache.outputs.dir }}" install --download-only -y $APT_PACKAGES
+          sudo apt-get -o Dir::Cache::archives="${{ steps.apt-cache.outputs.dir }}" install -y $APT_PACKAGES
+          sudo chmod -R a+rX "${{ steps.apt-cache.outputs.dir }}"
+
+      - name: Cache Pico SDK
+        id: cache-pico-sdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PICO_SDK_PATH }}
+          key: ${{ runner.os }}-${{ runner.arch }}-pico-sdk-${{ env.PICO_SDK_REF }}-tinyusb-${{ env.TINYUSB_REF }}
+
+      - name: Download Pico SDK
+        if: steps.cache-pico-sdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$PICO_SDK_REF" https://github.com/raspberrypi/pico-sdk.git "$PICO_SDK_PATH"
+          git -C "$PICO_SDK_PATH" submodule update --init --recursive
+
+      - name: Switch TinyUSB to configured tag
+        run: |
+          if ! git -C "$PICO_SDK_PATH/lib/tinyusb" rev-parse -q --verify "refs/tags/$TINYUSB_REF" >/dev/null; then
+            git -C "$PICO_SDK_PATH/lib/tinyusb" fetch --depth 1 origin "refs/tags/$TINYUSB_REF:refs/tags/$TINYUSB_REF"
+          fi
+          git -C "$PICO_SDK_PATH/lib/tinyusb" checkout --detach "$TINYUSB_REF"
+
+      - name: Build standard firmware
+        run: |
+          VERSION_ARG=()
+          [ -n "${FW_VER:-}" ] && VERSION_ARG=(-DVERSION="$FW_VER")
+          cmake -S . -B build/standard -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            "${VERSION_ARG[@]}"
+          cmake --build build/standard --target ds5-bridge
+          mkdir -p artifacts
+          cp build/standard/ds5-bridge.uf2 "artifacts/ds5-bridge${{ inputs.asset_suffix }}.uf2"
+
+      - name: Build Debug firmware
+        run: |
+          VERSION_ARG=()
+          [ -n "${FW_VER:-}" ] && VERSION_ARG=(-DVERSION="$FW_VER")
+          cmake -S . -B build/debug -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DENABLE_SERIAL=ON \
+            -DENABLE_VERBOSE=ON \
+            "${VERSION_ARG[@]}"
+          cmake --build build/debug --target ds5-bridge
+          cp build/debug/ds5-bridge.uf2 "artifacts/ds5-bridge-debug${{ inputs.asset_suffix }}.uf2"
+
+      - name: Build Pico W firmware
+        if: inputs.picow
+        run: |
+          VERSION_ARG=()
+          [ -n "${FW_VER:-}" ] && VERSION_ARG=(-DVERSION="$FW_VER")
+          cmake -S . -B build/picow -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DPICO_W_BUILD=ON \
+            "${VERSION_ARG[@]}"
+          cmake --build build/picow --target ds5-bridge
+          cp build/picow/ds5-bridge.uf2 "artifacts/ds5-bridge-picow${{ inputs.asset_suffix }}.uf2"
+
+      - name: Build no-batt-led firmware (compile check only)
+        if: inputs.no_batt_led_check
+        run: |
+          VERSION_ARG=()
+          [ -n "${FW_VER:-}" ] && VERSION_ARG=(-DVERSION="$FW_VER")
+          cmake -S . -B build/no-batt-led -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DENABLE_BATT_LED=OFF \
+            "${VERSION_ARG[@]}"
+          cmake --build build/no-batt-led --target ds5-bridge
+
+      # - name: Upload UF2 artifacts
+        # uses: actions/upload-artifact@v7
+        # with:
+          # name: ds5-bridge-uf2${{ inputs.asset_suffix }}
+          # path: artifacts/*.uf2
+          # if-no-files-found: error- name: Upload standard UF2 artifact
+
+      - uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/ds5-bridge${{ inputs.asset_suffix }}.uf2
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload Debug UF2 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/ds5-bridge-debug${{ inputs.asset_suffix }}.uf2
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload PicoW UF2 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/ds5-bridge-picow${{ inputs.asset_suffix }}.uf2
+          archive: false
+          if-no-files-found: error
+
+      - name: Attach UF2s to release
+        if: inputs.upload_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Pin to the workflow's own repo: when inputs.repo is set we checked
+          # out a different repo, so the local git remote must not decide this.
+          gh release upload "${{ inputs.upload_tag }}" artifacts/*.uf2 \
+            --repo "${{ github.repository }}" --clobber

@@ -16,3 +16,11 @@ void battery_led_tick(void);
 // has been copied into interrupt_in_data. Used to detect disconnection
 // via stale-report timeout.
 void battery_led_note_report(void);
+
+// Call from the BT disconnect handler. Cancels any in-progress blink,
+// forces the LED off, and arms the module so it ignores the cached
+// (now-stale) battery byte until a fresh report arrives on the next
+// connection. Without this, the LED can stay frozen in whichever state
+// it was at the moment of disconnect, or briefly resume blinking during
+// reconnect retries while interrupt_in_data[52] still reads low.
+void battery_led_on_disconnect(void);

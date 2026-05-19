@@ -37,11 +37,29 @@ void battery_led_note_report(void) {
     last_report_us = time_us_64();
 }
 
+void battery_led_on_disconnect(void) {
+    // Stop any in-progress blink and force the LED off immediately. Zero
+    // last_report_us so the tick's stale-check early-returns until a fresh
+    // 0x31 report arrives on the next connection — prevents the cached
+    // low-battery byte from re-arming a blink during reconnect retries.
+    blinking = false;
+    led_state = false;
+    last_report_us = 0;
+    last_toggle_us = 0;
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+}
+
 void battery_led_tick(void) {
     const uint64_t now = time_us_64();
     if (last_report_us == 0 || (now - last_report_us) >= REPORT_STALE_US) {
-        // No fresh data — bt.cpp owns the LED while disconnected.
-        blinking = false;
+        // No fresh data — bt.cpp owns the LED while disconnected. If we
+        // were mid-blink when the report went stale, force the LED off
+        // so it doesn't freeze in whichever half-cycle it was in.
+        if (blinking) {
+            blinking = false;
+            led_state = false;
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+        }
         return;
     }
 

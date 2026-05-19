@@ -6,18 +6,8 @@ on:
       - "**"
   workflow_dispatch:
 
-env:
-  PICO_SDK_REF: 2.2.0
-  TINYUSB_REF: 0.20.0
-  PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
-  APT_PACKAGES: >-
-    cmake
-    python3
-    build-essential
-    gcc-arm-none-eabi
-    libnewlib-arm-none-eabi
-    libstdc++-arm-none-eabi-newlib
-    ninja-build
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -155,3 +145,8 @@ jobs:
           path: artifacts/ds5-bridge-picow.uf2
           archive: false
           if-no-files-found: error
+    uses: ./.github/workflows/build-firmware.yml
+    with:
+      version: ${{ github.sha }}   # reusable build shortens a full SHA to 7
+      picow: true
+      no_batt_led_check: true
