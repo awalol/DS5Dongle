@@ -142,6 +142,7 @@ if(WAKE_DEBUG)
             WAKE_DEBUG
     )
 endif()
+
 set(VERSION "dev" CACHE STRING "Program version string")
 
 pico_set_program_name(ds5-bridge "ds5-bridge")

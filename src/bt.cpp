@@ -327,6 +327,16 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
+#if !ENABLE_SERIAL && !defined(ENABLE_WAKE_HID)
+            // Without ENABLE_WAKE_HID we hide the USB device whenever no
+            // controller is paired (upstream behavior). With wake enabled
+            // we must stay on the bus across controller power-cycles, so
+            // tud_suspend_cb can later fire and tud_remote_wakeup() can
+            // signal a wake when the controller is turned back on.
+            tud_disconnect();
+#endif
+            gap_connectable_control(1);
+            gap_discoverable_control(1);
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
             device_found = false;
             new_pair = false;
@@ -335,6 +345,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hid_control_cid = 0;
             hid_interrupt_cid = 0;
             feature_data.clear();
+            while (queue_try_remove(&send_fifo, NULL)) {}
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
 #if ENABLE_BATT_LED
             battery_led_on_disconnect();
