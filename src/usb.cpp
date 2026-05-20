@@ -2,12 +2,13 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include "bt.h"
 #include "tusb.h"
 #include "bsp/board_api.h"
 #include "config.h"
 
 uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
-float volume[2] = {-100.0f,0.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
+float volume[2] = {-100.0f, 0.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
 
 #define UAC1_ENTITY_SPK_FEATURE_UNIT    0x02
 #define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05
@@ -122,7 +123,7 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
                             if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
                                 min[0] = 0x00;
                                 min[1] = 0x9c;
-                            }else {
+                            } else {
                                 min[0] = 0x00;
                                 min[1] = 0x00;
                             }
@@ -135,7 +136,7 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
                             if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
                                 max[0] = 0x00;
                                 max[1] = 0x00;
-                            }else {
+                            } else {
                                 max[0] = 0x00;
                                 max[1] = 0x30;
                             }
@@ -148,7 +149,7 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
                             if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
                                 res[0] = 0x00;
                                 res[1] = 0x01;
-                            }else {
+                            } else {
                                 res[0] = 0x7a;
                                 res[1] = 0x00;
                             }
@@ -189,3 +190,98 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
     (void) instance;
     (void) len;
 }
+
+bool sleep = false;
+bool prev_sleep = false;  // Track previous sleep state to detect transitions
+
+bool usb_is_sleep() {
+    return sleep;
+}
+
+void usb_on_mount() {
+    printf("[USB] invoke tud_mount_cb\n");
+    sleep = false;
+    if (bt_connected()) {
+        return;
+    }
+    printf("[USB] tud_mount_cb: bt_scan_start and tud_disconnect\n");
+    bt_scan_start();
+    tud_disconnect();
+}
+
+void usb_on_umount() {
+    // In actual testing, power-off triggers tud_suspend_cb. So far, no tud_umount_cb has been observed.
+    printf("[USB] invoke tud_umount_cb\n");
+    // Only disconnect when transitioning INTO sleep (not if already sleeping)
+    if (!sleep) {
+        sleep = true;
+        if (bt_connected()) {
+            bt_disconnect();
+        }
+    }
+    bt_scan_stop();
+}
+
+void usb_on_suspend(bool remote_wakeup_en) {
+    // When USB enters sleep mode, turn off the connected controller and
+    // keep the USB attachment alive so the host can still wake via remote wakeup.
+    (void) remote_wakeup_en;
+
+    printf("[USB] invoke tud_suspend_cb\n");
+    // Only disconnect when transitioning INTO sleep (not if already sleeping)
+    if (!sleep) {
+        sleep = true;
+        if (bt_connected()) {
+            printf("[USB] tud_suspend_cb: Disconnecting controller on sleep transition\n");
+            bt_disconnect();
+        }
+    }
+#ifdef ENABLE_WAKE_HID
+    printf("[USB] tud_suspend_cb: bt_scan_start (wake HID enabled)\n");
+    bt_scan_start();
+#else
+    printf("[USB] tud_suspend_cb: bt_scan_stop\n");
+    bt_scan_stop();
+#endif
+}
+
+void usb_on_resume() {
+    printf("[USB] invoke tud_resume_cb\n");
+    // Only process when transitioning OUT OF sleep
+    if (sleep) {
+        sleep = false;
+        printf("[USB] tud_resume_cb: Woke from sleep\n");
+    }
+    if (!bt_connected()) {
+        bt_scan_start();
+#ifdef ENABLE_WAKE_HID
+        printf("[USB] tud_resume_cb: bt_scan_start\n");
+#else
+        printf("[USB] tud_resume_cb: bt_scan_start and tud_disconnect\n");
+        tud_disconnect();
+#endif
+    } else {
+        printf("[USB] tud_resume_cb: already connected, reconnecting USB\n");
+#if !ENABLE_SERIAL
+        tud_connect();
+#endif
+    }
+}
+
+#ifndef ENABLE_WAKE_HID
+void tud_mount_cb(void) {
+    usb_on_mount();
+}
+
+void tud_umount_cb(void) {
+    usb_on_umount();
+}
+
+void tud_suspend_cb(bool remote_wakeup_en) {
+    usb_on_suspend(remote_wakeup_en);
+}
+
+void tud_resume_cb(void) {
+    usb_on_resume();
+}
+#endif

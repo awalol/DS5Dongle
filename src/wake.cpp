@@ -12,6 +12,7 @@
 #include "device/dcd.h"
 #include "pico/sync.h"
 #include "pico/time.h"
+#include "usb.h"
 
 #define WAKE_KBD_INSTANCE     1
 #define WAKE_KEYCODE_F15      0x68
@@ -54,6 +55,7 @@ typedef enum {
 static critical_section_t wake_cs;
 static volatile bool host_suspended = false;
 static volatile bool host_resumed_event = false;
+static volatile bool pending_wake_on_connect = false;
 static wake_state_t state = WAKE_IDLE;
 static uint64_t state_entered_us = 0;
 static uint8_t key_attempts = 0;
@@ -75,6 +77,7 @@ void wake_init(void) {
 extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     WAKE_DBG("tud_suspend_cb remote_wakeup_en=%d prev_state=%s",
              (int)remote_wakeup_en, wake_state_name(state));
+    usb_on_suspend(remote_wakeup_en);
     host_suspended = true;
     host_resumed_event = false;
     
@@ -90,14 +93,23 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
 
 extern "C" void tud_resume_cb(void) {
     WAKE_DBG("tud_resume_cb state=%s", wake_state_name(state));
+    usb_on_resume();
     host_suspended = false;
     host_resumed_event = true;
 }
 
 extern "C" void tud_mount_cb(void) {
     WAKE_DBG("tud_mount_cb state=%s", wake_state_name(state));
-    host_suspended = false;
-    host_resumed_event = true;
+    usb_on_mount();
+    if (host_suspended) {
+        host_suspended = false;
+        host_resumed_event = true;
+    }
+}
+
+extern "C" void tud_umount_cb(void) {
+    WAKE_DBG("tud_umount_cb state=%s", wake_state_name(state));
+    usb_on_umount();
 }
 
 void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {
@@ -128,11 +140,11 @@ void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {
 
     critical_section_enter_blocking(&wake_cs);
     const bool changed = (b7 != prev_b7) || (b8 != prev_b8) || (b9 != prev_b9);
-    const bool armable = (state == WAKE_IDLE || state == WAKE_DONE || state == WAKE_PENDING_PRESS);
+    const bool armable = (state == WAKE_PENDING_PRESS || state == WAKE_IDLE || state == WAKE_DONE);
     prev_b7 = b7; prev_b8 = b8; prev_b9 = b9;
     critical_section_exit(&wake_cs);
 
-    if (changed && armable) {
+    if (changed && armable && host_suspended) {
         bool ok = tud_remote_wakeup();
         
         // Linux quirk: Sometimes Linux fails to set the REMOTE_WAKEUP feature
@@ -171,15 +183,47 @@ void wake_on_bt_disconnect(void) {
     critical_section_exit(&wake_cs);
 }
 
+void wake_on_bt_connect(void) {
+    critical_section_enter_blocking(&wake_cs);
+    if (host_suspended && state == WAKE_PENDING_PRESS) {
+        pending_wake_on_connect = true;
+        WAKE_DBG("bt connect: flagged pending_wake_on_connect (will be handled in wake_task)");
+    }
+    critical_section_exit(&wake_cs);
+}
+
 void wake_task(void) {
     const uint64_t now = time_us_64();
 
     critical_section_enter_blocking(&wake_cs);
     const wake_state_t s = state;
     const uint64_t entered = state_entered_us;
+    const bool check_pending_connect = pending_wake_on_connect;
+    if (pending_wake_on_connect) {
+        pending_wake_on_connect = false;
+    }
     critical_section_exit(&wake_cs);
 
+    // Handle deferred wake-on-connect in main loop context (safe from BT callback)
+    if (check_pending_connect && host_suspended && (s == WAKE_IDLE || s == WAKE_PENDING_PRESS)) {
+        bool ok = tud_remote_wakeup();
+        if (!ok && host_suspended) {
+            WAKE_DBG("(deferred) tud_remote_wakeup()=0 but suspended. Forcing DCD wake.");
+            dcd_remote_wakeup(0);
+            ok = true;
+        }
+        if (ok) {
+            critical_section_enter_blocking(&wake_cs);
+            state = WAKE_REQUESTED;
+            state_entered_us = time_us_64();
+            critical_section_exit(&wake_cs);
+            WAKE_DBG("(deferred connect) -> REQUESTED, tud_remote_wakeup()=1");
+        }
+        return;
+    }
+
     switch (s) {
+
         case WAKE_IDLE:
         case WAKE_PENDING_PRESS:
         case WAKE_DONE:

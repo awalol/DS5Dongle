@@ -8,4 +8,11 @@
 extern uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
 extern float volume[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
 
+bool usb_is_sleep();
+
+void usb_on_mount();
+void usb_on_umount();
+void usb_on_suspend(bool remote_wakeup_en);
+void usb_on_resume();
+
 #endif //DS5_BRIDGE_USB_H
