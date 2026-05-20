@@ -12,6 +12,11 @@ permissions:
 jobs:
   build:
     name: Build UF2 artifacts
+    uses: ./.github/workflows/build-firmware.yml
+    with:
+      version: ${{ github.sha }}   # reusable build shortens a full SHA to 7
+      picow: true
+      no_batt_led_check: true
     runs-on: ubuntu-latest
 
     steps:
@@ -145,8 +150,3 @@ jobs:
           path: artifacts/ds5-bridge-picow.uf2
           archive: false
           if-no-files-found: error
-    uses: ./.github/workflows/build-firmware.yml
-    with:
-      version: ${{ github.sha }}   # reusable build shortens a full SHA to 7
-      picow: true
-      no_batt_led_check: true
