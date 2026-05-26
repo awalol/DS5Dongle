@@ -1,34 +1,99 @@
 # Pico2W DualSense 5 Bridge
-[English](./README.EN.md)
-> 将 Pico2W 变成 DS5 手柄的无线适配器
 
-# 功能特点
- - 支持HD震动
- - 支持麦克风，但是性能优化没做好，暂时不打算合进主分支
+# ***Warning: Overclocking may cause instability or permanent damage to the Raspberry Pi Pico.***
+- 1.6V 500MHz
 
-# 使用方法
-1. 按住 Pico 上的BOOTSEL进入刷机
-2. 将 .uf2 文件拖入进去
-3. 将 DS5 手柄进入蓝牙配对模式
-4. Enjoy it
 
-- 调整麦克风音量为改变震动增益倍数，范围 [1,2]
-- 开启扬声器静音为关闭LED连接提示 (手柄重连后生效)
-- 开启麦克风静音为禁用静默断连
-- 手柄连接到pico以后，系统才会显示设备
+[中文](./README.ZH.md)
 
-# 当前问题:
-- 声音可能有点小卡顿
-- 由于编码需要，需要对pico进行超频，当前的参数是1.2V 320MHz。
-- 若您的pico使用该超频参数无法启动，请自行增加电压或者降低频率
+> Turn a Raspberry Pi Pico2W into a wireless adapter for the DualSense (DS5) controller.
 
-# 未来计划
+## Overview
 
-# 编译
-需要将pico sdk里面的tinyusb版本升级到最新
+This project enables the Raspberry Pi Pico2W to function as a Bluetooth bridge for the DualSense controller, allowing wireless connectivity with enhanced haptics support.
 
-# 致谢
- - [rafaelvaloto/Pico_W-Dualsense](https://github.com/rafaelvaloto/Pico_W-Dualsense) - 灵感来源
- - [egormanga/SAxense](https://github.com/egormanga/SAxense) - 震动报文
- - [https://controllers.fandom.com/wiki/Sony_DualSense](https://controllers.fandom.com/wiki/Sony_DualSense) - 数据报文结构
- - [Paliverse/DualSenseX](https://github.com/Paliverse/DualSenseX) - 扬声器数据包报文
+## Features
+
+- 🎮 Full DualSense connectivity via Pico2W
+- 🔊 Supports HD haptics (advanced vibration feedback)
+- 📡 Wireless Bluetooth bridging
+- ⚙️ Adjustable haptic gain via microphone volume
+- 🔕 Configurable LED and disconnection behaviors
+- Support microphone, but performance optimization is not good, temporarily not planned to merge into the main branch
+
+## Getting Started
+
+### Flashing Firmware
+
+1. Hold the BOOTSEL button on the Pico2W
+2. Connect the Pico2W to your computer via USB
+3. The device will mount as a USB storage device
+4. Drag and drop the .uf2 firmware file onto the device
+
+### Pairing the Controller
+
+1. Put the DualSense controller into Bluetooth pairing mode
+2. Wait for the Pico2W to detect and connect
+3. Once connected, the device will appear on the host system
+
+## Configuration
+
+The following controller settings are repurposed:
+
+### Microphone volume
+
+Controls haptic gain multiplier
+
+Range: [1.0 – 2.0]
+
+### Speaker mute
+
+Disables LED connection indicator
+
+Takes effect after controller reconnects
+
+### Microphone mute
+
+Disables silent disconnection behavior
+
+## Notes
+
+The Pico device will only be visible to the system after the controller is connected
+
+Some behaviors depend on reconnection cycles to take effect
+
+## Known Issues
+
+- ⚠️ Audio may experience slight stuttering
+- ⚠️ Overclocking is required for proper performance
+
+## Performance / Overclocking
+
+Due to encoding requirements, the Pico2W must be overclocked:
+
+Current settings:
+
+- Voltage: 1.6V
+- Frequency: 500 MHz
+
+If your device fails to boot:
+
+- Increase voltage slightly or Reduce CPU frequency
+
+## Build Instructions
+
+To build the project from source:
+
+1. Update TinyUSB in the Pico SDK to the latest version
+2. Compile using standard Pico SDK toolchain
+
+## Roadmap
+
+- Improve audio stability
+
+## References
+
+- [rafaelvaloto/Pico_W-Dualsense](https://github.com/rafaelvaloto/Pico_W-Dualsense) — Project inspiration
+- [egormanga/SAxense](https://github.com/egormanga/SAxense) — Bluetooth Haptics POC
+- [https://controllers.fandom.com/wiki/Sony_DualSense](https://controllers.fandom.com/wiki/Sony_DualSense) - DualSense data report structure documentation
+- [Paliverse/DualSenseX](https://github.com/Paliverse/DualSenseX) — Speaker report packet

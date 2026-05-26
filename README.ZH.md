@@ -1,0 +1,34 @@
+# Pico2W DualSense 5 Bridge
+[English](./README.md)
+> 将 Pico2W 变成 DS5 手柄的无线适配器
+
+# 功能特点
+ - 支持HD震动
+ - 支持麦克风，但是性能优化没做好，暂时不打算合进主分支
+
+# 使用方法
+1. 按住 Pico 上的BOOTSEL进入刷机
+2. 将 .uf2 文件拖入进去
+3. 将 DS5 手柄进入蓝牙配对模式
+4. Enjoy it
+
+- 调整麦克风音量为改变震动增益倍数，范围 [1,2]
+- 开启扬声器静音为关闭LED连接提示 (手柄重连后生效)
+- 开启麦克风静音为禁用静默断连
+- 手柄连接到pico以后，系统才会显示设备
+
+# 当前问题:
+- 声音可能有点小卡顿
+- 由于编码需要，需要对pico进行超频，当前的参数是1.2V 320MHz。
+- 若您的pico使用该超频参数无法启动，请自行增加电压或者降低频率
+
+# 未来计划
+
+# 编译
+需要将pico sdk里面的tinyusb版本升级到最新
+
+# 致谢
+ - [rafaelvaloto/Pico_W-Dualsense](https://github.com/rafaelvaloto/Pico_W-Dualsense) - 灵感来源
+ - [egormanga/SAxense](https://github.com/egormanga/SAxense) - 震动报文
+ - [https://controllers.fandom.com/wiki/Sony_DualSense](https://controllers.fandom.com/wiki/Sony_DualSense) - 数据报文结构
+ - [Paliverse/DualSenseX](https://github.com/Paliverse/DualSenseX) - 扬声器数据包报文
