@@ -189,13 +189,13 @@ jobs:
         run: |
           VERSION_ARG=()
           [ -n "${FW_VER:-}" ] && VERSION_ARG=(-DVERSION="$FW_VER")
-          cmake -S . -B build/picow -G Ninja \
+          cmake -S . -B build/usbwake -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
             -DENABLE_WAKE_HID=ON \
             "${VERSION_ARG[@]}"
-          cmake --build build/picow --target ds5-bridge
-          cp build/picow/ds5-bridge.uf2 "artifacts/ds5-bridge-usbwake${{ inputs.asset_suffix }}.uf2"
+          cmake --build build/usbwake --target ds5-bridge
+          cp build/usbwake/ds5-bridge.uf2 "artifacts/ds5-bridge-usbwake${{ inputs.asset_suffix }}.uf2"
 
 #      - name: Build no-batt-led firmware (compile check only)
 #        if: inputs.no_batt_led_check
