@@ -379,7 +379,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             battery_led_on_disconnect();
 #endif
             printf("[HCI] Disconnected reason=0x%02X\n", reason);
-            // gap_inquiry_start(30);
+            gap_inquiry_start(30);
+            bt_inquiring = true;
             break;
         }
 
