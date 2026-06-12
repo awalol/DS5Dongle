@@ -16,5 +16,6 @@ jobs:
     with:
       version: ${{ github.sha }}   # reusable build shortens a full SHA to 7
       picow: true
+      waveshare: true
       no_batt_led_check: true
       usbwake: true

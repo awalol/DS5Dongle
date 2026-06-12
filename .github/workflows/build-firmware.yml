@@ -38,6 +38,11 @@ on:
         required: false
         type: boolean
         default: false
+      waveshare:
+        description: Also build the Waveshare RP2350B-Plus-W UF2 (-DWAVESHARE_RP2350B_PLUS_W_BUILD=ON)
+        required: false
+        type: boolean
+        default: false
       no_batt_led_check:
         description: Also compile-check the no-batt-led config (-DENABLE_BATT_LED=OFF)
         required: false
@@ -53,13 +58,13 @@ env:
   PICO_SDK_REF: 2.2.0
   TINYUSB_REF: 0.20.0
   PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
+  ARM_TOOLCHAIN_VERSION: 14.2.rel1
+  ARM_TOOLCHAIN_URL: https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz
+  ARM_TOOLCHAIN_PATH: ${{ github.workspace }}/arm-toolchain
   APT_PACKAGES: >-
     cmake
     python3
     build-essential
-    gcc-arm-none-eabi
-    libnewlib-arm-none-eabi
-    libstdc++-arm-none-eabi-newlib
     ninja-build
 
 jobs:
@@ -113,6 +118,29 @@ jobs:
           sudo apt-get -o Dir::Cache::archives="${{ steps.apt-cache.outputs.dir }}" install --download-only -y $APT_PACKAGES
           sudo apt-get -o Dir::Cache::archives="${{ steps.apt-cache.outputs.dir }}" install -y $APT_PACKAGES
           sudo chmod -R a+rX "${{ steps.apt-cache.outputs.dir }}"
+
+      - name: Cache ARM toolchain
+        id: cache-arm-toolchain
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ARM_TOOLCHAIN_PATH }}
+          key: ${{ runner.os }}-${{ runner.arch }}-arm-toolchain-${{ env.ARM_TOOLCHAIN_VERSION }}
+
+      - name: Download ARM toolchain
+        if: steps.cache-arm-toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$ARM_TOOLCHAIN_PATH"
+          curl -fsSL "$ARM_TOOLCHAIN_URL" | sudo tar -xJ -C "$ARM_TOOLCHAIN_PATH" --strip-components=1
+          sudo chmod -R a+rX "$ARM_TOOLCHAIN_PATH"
+
+      - name: Add ARM toolchain to PATH
+        run: |
+          echo "$ARM_TOOLCHAIN_PATH/bin" >> "$GITHUB_PATH"
+
+      - name: Verify ARM toolchain
+        run: |
+          which arm-none-eabi-gcc
+          arm-none-eabi-gcc --version
 
       - name: Cache Pico SDK
         id: cache-pico-sdk
@@ -169,7 +197,7 @@ jobs:
             -DDISABLE_SPEAKER_PROC=ON \
             "${VERSION_ARG[@]}"
           cmake --build build/nospeaker --target ds5-bridge
-          cp build/debug/ds5-bridge.uf2 "artifacts/ds5-bridge-no-oc-and-spk${{ inputs.asset_suffix }}.uf2"
+          cp build/nospeaker/ds5-bridge.uf2 "artifacts/ds5-bridge-no-oc-and-spk${{ inputs.asset_suffix }}.uf2"
 
       - name: Build Pico W firmware
         if: inputs.picow
@@ -183,6 +211,19 @@ jobs:
             "${VERSION_ARG[@]}"
           cmake --build build/picow --target ds5-bridge
           cp build/picow/ds5-bridge.uf2 "artifacts/ds5-bridge-picow${{ inputs.asset_suffix }}.uf2"
+
+      - name: Build Waveshare RP2350B-Plus-W firmware
+        if: inputs.waveshare
+        run: |
+          VERSION_ARG=()
+          [ -n "${FW_VER:-}" ] && VERSION_ARG=(-DVERSION="$FW_VER")
+          cmake -S . -B build/waveshare -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DWAVESHARE_RP2350B_PLUS_W_BUILD=ON \
+            "${VERSION_ARG[@]}"
+          cmake --build build/waveshare --target ds5-bridge
+          cp build/waveshare/ds5-bridge.uf2 "artifacts/ds5-bridge-waveshare${{ inputs.asset_suffix }}.uf2"
 
       - name: Build USB-Wake firmware
         if: inputs.picow
@@ -241,6 +282,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/ds5-bridge-picow${{ inputs.asset_suffix }}.uf2
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload Waveshare UF2 artifact
+        if: inputs.waveshare
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/ds5-bridge-waveshare${{ inputs.asset_suffix }}.uf2
           archive: false
           if-no-files-found: error
 

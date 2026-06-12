@@ -13,6 +13,8 @@
 #include "device/dcd.h"
 #include "pico/sync.h"
 #include "pico/time.h"
+#include "ps_shortcut.h"
+
 
 #define WAKE_KBD_INSTANCE     1
 #define WAKE_KEYCODE_F15      0x68
@@ -186,6 +188,7 @@ void wake_on_bt_disconnect(void) {
     state = WAKE_IDLE;
     prev_b7 = 0x08; prev_b8 = 0x00; prev_b9 = 0x00;
     critical_section_exit(&wake_cs);
+    ps_shortcut_reset();
 }
 
 void wake_task(void) {

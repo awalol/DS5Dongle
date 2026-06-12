@@ -24,12 +24,31 @@ if (EXISTS ${picoVscode})
 endif ()
 # ====================================================================================
 
+option(PICO_W_BUILD "Build for Rasberry Pi Pico W, audio is missing" OFF)
+option(WAVESHARE_RP2350B_PLUS_W_BUILD "Build for Waveshare RP2350B-Plus-W (USB-C, 16MB flash, RM2 wireless)" OFF)
+
+if (PICO_W_BUILD AND WAVESHARE_RP2350B_PLUS_W_BUILD)
+        message(FATAL_ERROR "PICO_W_BUILD and WAVESHARE_RP2350B_PLUS_W_BUILD are mutually exclusive")
+endif ()
+
 if (PICO_W_BUILD)
         set(PICO_BOARD pico_w CACHE STRING "Board type")
         set(PICO_RP2350 OFF CACHE BOOL "Not using RP2350")
+elseif (WAVESHARE_RP2350B_PLUS_W_BUILD)
+        set(PICO_BOARD waveshare_rp2350b_plus_w CACHE STRING "Board type")
+        # Waveshare board header is not in upstream pico-sdk; ship it here and
+        # tell the SDK to search this directory when resolving PICO_BOARD.
+        list(APPEND PICO_BOARD_HEADER_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/boards/headers")
 else ()
         set(PICO_BOARD pico2_w CACHE STRING "Board type")
 endif ()
+
+# Diagnostic: confirm PICO_BOARD resolution actually applied. Build log will
+# show which board path was taken. Remove these once verified on hardware.
+message(STATUS "DS5Dongle build target -- PICO_BOARD=${PICO_BOARD}")
+message(STATUS "DS5Dongle build target -- PICO_W_BUILD=${PICO_W_BUILD}")
+message(STATUS "DS5Dongle build target -- WAVESHARE_RP2350B_PLUS_W_BUILD=${WAVESHARE_RP2350B_PLUS_W_BUILD}")
+message(STATUS "DS5Dongle build target -- PICO_BOARD_HEADER_DIRS=${PICO_BOARD_HEADER_DIRS}")
 #set(PICO_CYW43_SUPPORTED 1)
 #set(PICO_CYW43_ARCH_THREADSAFE_BACKGROUND 1)
 
@@ -150,7 +169,6 @@ target_compile_options(ds5-bridge PRIVATE -fsigned-char)
 target_compile_definitions(wdl_resampler PRIVATE
         WDL_RESAMPLE_TYPE=float
 )
-
 if(${SYS_CLOCK_KHZ_VALUE} GREATER 266000)
     set(PICO_FLASH_SPI_CLKDIV 4)
 else()
@@ -158,7 +176,6 @@ else()
 endif()
 target_compile_definitions(bs2_default PRIVATE PICO_FLASH_SPI_CLKDIV=${PICO_FLASH_SPI_CLKDIV})
 target_compile_definitions(ds5-bridge PRIVATE PICO_EMBED_XIP_SETUP=1)
-
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
         ENABLE_SERIAL=${ENABLE_SERIAL_VALUE}
@@ -181,7 +198,8 @@ if(ENABLE_WAKE_HID)
     )
     target_sources(ds5-bridge PRIVATE
             src/wake.cpp
-    )
+            src/ps_shortcut.cpp
+     )
 endif()
 
 option(WAKE_DEBUG "Print wake-FSM transitions to UART (developer use)" OFF)

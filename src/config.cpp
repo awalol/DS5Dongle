@@ -100,6 +100,10 @@ void config_valid() {
         body->disable_usb_sn = 0;
         printf("[Config] Warning: disable_usb_sn is invalid\n");
     }
+    if (body->ps_shortcut_enabled > 1) {
+        body->ps_shortcut_enabled = 0;
+        printf("[Config] ps_shortcut_enabled is invalid\n");
+    }
 }
 
 void config_load() {

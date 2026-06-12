@@ -2,19 +2,18 @@
 
 [中文](./README.CN.md)
 
-> Turn a Raspberry Pi Pico2W into a wireless adapter for the DualSense (DS5) controller.
+> Turn a Raspberry Pi Pico2W (or other compatible board) into a wireless adapter for the DualSense (DS5) controller.
 
 ***This repository only implements the core functionality of DS5Dongle — making a wireless controller appear as a wired
 connection. For additional features, please refer to [Community Fork](#Community-Fork)***
 
 ## Overview
 
-This project enables the Raspberry Pi Pico2W to function as a Bluetooth bridge for the DualSense controller, allowing
-wireless connectivity with enhanced haptics support.
+This project enables the Raspberry Pi Pico2W (or other compatible board, e.g. the Waveshare RP2350B-Plus-W) to function as a Bluetooth bridge for the DualSense controller, allowing wireless connectivity with enhanced haptics support.
 
 ## Features
 
-- 🎮 Full DualSense connectivity via Pico2W
+- 🎮 Full DualSense connectivity via Pico2W (or other compatible board)
 - 🔊 Supports HD haptics (advanced vibration feedback)
 - 📡 Wireless Bluetooth bridging
 
@@ -94,6 +93,18 @@ To opt out at build time, configure with `-DENABLE_BATT_LED=OFF`. Default is ON.
 Pico W only has haptics support, no speaker. You can enable Pico W firmware compilation with `-DPICO_W_BUILD=ON`, or
 download precompiled firmware from GitHub Actions.
 
+### Waveshare RP2350B-Plus-W
+
+The [Waveshare RP2350B-Plus-W](https://www.waveshare.com/wiki/RP2350B-Plus-W) is an RP2350B-based board with the RM2 wireless module (same CYW43 silicon as the Pico 2 W), 16 MB QSPI flash, and a USB-C connector. Build with:
+
+```
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DPICO_SDK_PATH=<sdk> -DWAVESHARE_RP2350B_PLUS_W_BUILD=ON
+cmake --build build --target ds5-bridge
+```
+
+Or download precompiled firmware from GitHub Actions.
+
 ### USB Wake Feature
 
 This feature is experimental. If you need this functionality, please check out the feat/usb-wake branch to compile it,
@@ -109,7 +120,7 @@ It is recommended to read #60 and #61 before using this feature.
 
 ## Performance / Overclocking
 
-Due to encoding requirements, the Pico2W must be overclocked:
+Due to encoding requirements, the RP2350 must be overclocked:
 
 Current settings:
 
