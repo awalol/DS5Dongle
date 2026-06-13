@@ -48,6 +48,13 @@ static bool check_dse = false;
 // 2=profiles prefetched, waiting briefly for responses before USB connect
 static int dse_unlock_phase = 0;
 static uint32_t dse_unlock_started_ms = 0;
+// False from DSE connect until the unlock+prefetch completes. While false,
+// GET of profile reports 0x70-0x7B returns a short "busy" response so the
+// PS app retries (it polls these repeatedly during load) instead of caching
+// an empty snapshot. No USB enumeration delay required.
+static bool dse_profiles_ready = true;
+
+bool bt_dse_profiles_ready() { return dse_profiles_ready; }
 static uint32_t dse_profile_written_ms = 0;
 static int dse_profile_refresh_round = 0;
 // Paced profile prefetch sequencer: fetching all 12 profile reports as a
@@ -478,12 +485,18 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     unlock[0] = 0x70;
                     unlock[1] = 0x01;
                     set_feature_data(0x80, unlock, sizeof(unlock));
-                    // 3) Defer tud_connect(): the controller needs ~3.5s to prepare
-                    //    profile data. dse_unlock_task() prefetches the profile
-                    //    reports once ready, then connects USB, so the PS app's very
-                    //    first read returns real data instead of a stale empty cache.
+                    // 3) Connect USB immediately (no delay). The controller needs
+                    //    ~3.5s to prepare the profile snapshot; rather than holding
+                    //    back enumeration, we mark profiles "busy" until the unlock
+                    //    completes. The PS app reads profiles repeatedly during its
+                    //    load sequence (capture shows 0x71/0x72 read 24x), so its own
+                    //    retry loop converges on real data once dse_profiles_ready.
                     dse_unlock_started_ms = to_ms_since_boot(get_absolute_time());
                     dse_unlock_phase = 1;
+                    dse_profiles_ready = false;
+#if !ENABLE_SERIAL
+                    tud_connect();
+#endif
                 } else if (packet[0] == 0x02) {
                     printf("Connected DS5 Controller\n");
                     check_dse = false;
@@ -681,14 +694,12 @@ void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
         printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
         printf_hexdump(get_feature, len + 2);
 #endif
-#ifdef DSE_POST_SAVE_REFRESH
         // Variant B: single gentle refresh of profile read-back cache after
         // a profile slot write, so the app's verify read sees committed data.
         if (reportId >= 0x60 && reportId <= 0x62) {
             dse_profile_written_ms = to_ms_since_boot(get_absolute_time());
             dse_profile_refresh_round = 0;
         }
-#endif
     }
 }
 
@@ -717,8 +728,8 @@ void dse_unlock_task() {
                 dse_prefetch_next = 0; // done
                 if (dse_prefetch_connect) {
                     dse_prefetch_connect = false;
-                    dse_unlock_phase = 2;
-                    dse_unlock_started_ms = now;
+                    dse_profiles_ready = true; // app's retry reads now return real data
+                    printf("[DSE] Profile snapshot ready\n");
                 }
             } else {
                 dse_prefetch_next++;
@@ -729,7 +740,6 @@ void dse_unlock_task() {
         dse_prefetch_connect = false;
     }
 
-#ifdef DSE_POST_SAVE_REFRESH
     // Post-save snapshot regeneration, mirroring the PS app's own cycle:
     //   SET 0x80  ->  poll GET 0x81 (x6, spaced)  ->  re-read profiles.
     if (dse_profile_written_ms != 0 && hid_control_cid != 0) {
@@ -752,27 +762,22 @@ void dse_unlock_task() {
             printf("[DSE] Post-save: profile snapshot refetch started\n");
         }
     }
-#endif
 
     if (dse_unlock_phase == 0) {
         return;
     }
     if (hid_control_cid == 0) { // controller went away mid-unlock
         dse_unlock_phase = 0;
+        dse_profiles_ready = true; // don't leave profiles gated if it vanished
         return;
     }
     const uint32_t elapsed = now - dse_unlock_started_ms;
-    if (dse_unlock_phase == 1 && elapsed >= 4500) {
-        dse_prefetch_start(true); // paced prefetch, connect USB when done
-        dse_unlock_phase = 3;     // sequencer will advance to phase 2
-        printf("[DSE] Unlock wait done, prefetching profile reports\n");
-    } else if (dse_unlock_phase == 2 && elapsed >= 700) {
-        // 700ms after the last prefetch GET: responses have landed
+    if (dse_unlock_phase == 1 && elapsed >= 4000) {
+        // Controller has had ~4s to prepare the snapshot; prefetch it (paced).
+        // USB is already connected; completion just flips dse_profiles_ready.
+        dse_prefetch_start(true);
         dse_unlock_phase = 0;
-        printf("[DSE] Profile cache primed, connecting USB\n");
-#if !ENABLE_SERIAL
-        tud_connect();
-#endif
+        printf("[DSE] Unlock wait done, prefetching profile reports\n");
     }
 }
 
