@@ -237,9 +237,7 @@ keyboard shortcuts, sent over the same HID keyboard interface used by [Wake-on-P
 - **Short press** (tap and release) → `Win`+`G`, which opens the **Xbox Game Bar** overlay.
 - **Long press** (hold ≥ 750 ms) → `Win`+`Tab`, which opens **Task View**.
 
-The toggle is off by default, and the keyboard interface is only enumerated while it (or wake) is enabled. Note this
-only *opens* the Game Bar: the DualSense is not an XInput gamepad, so Windows won't let the controller navigate the
-overlay — use a mouse or keyboard for that.
+The toggle is off by default, and the keyboard interface is only enumerated while it (or wake) is enabled.
 
 ## Wake-on-PS (optional)
 
