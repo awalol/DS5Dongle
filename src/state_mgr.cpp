@@ -40,7 +40,7 @@ void state_init() {
     memcpy(&state, state_init_data, sizeof(state));
     state.VolumeSpeaker = get_config().speaker_volume;
     state.VolumeHeadphones = get_config().headset_volume;
-    set_volume(get_config().speaker_volume,get_config().headset_volume);
+    set_volume(get_config().speaker_volume, get_config().headset_volume);
     set_gain(get_config().speaker_gain);
 }
 
@@ -82,11 +82,16 @@ void state_update(const uint8_t *data, const uint8_t size) {
     state.EnableRumbleEmulation = update.EnableRumbleEmulation;
     state.UseRumbleNotHaptics = update.UseRumbleNotHaptics;
     state.EnableImprovedRumbleEmulation = update.EnableImprovedRumbleEmulation;
-    copy_if_allowed(
-        update.UseRumbleNotHaptics || update.EnableRumbleEmulation,
-        offsetof(SetStateData, RumbleEmulationRight),
-        2
-    );
+    if (update.RumbleEmulationLeft > 0 || update.RumbleEmulationRight > 0) {
+        // why doesn't ninja gaiden 4 enable UseRumbleNotHaptics
+        state.UseRumbleNotHaptics = true;
+    }
+    if (state.EnableRumbleEmulation ||
+        state.UseRumbleNotHaptics ||
+        state.EnableImprovedRumbleEmulation) {
+        state.RumbleEmulationLeft = update.RumbleEmulationLeft;
+        state.RumbleEmulationRight = update.RumbleEmulationRight;
+    }
 
     if (!get_config().lock_volume && update.AllowHeadphoneVolume) {
         get_config().headset_volume = update.VolumeHeadphones;
@@ -181,7 +186,7 @@ void set_volume(const uint8_t value) {
     get_config().headset_volume = value;
 }
 
-void set_volume(const uint8_t speaker,const uint8_t headset) {
+void set_volume(const uint8_t speaker, const uint8_t headset) {
     state.VolumeSpeaker = speaker;
     state.VolumeHeadphones = headset;
 }

@@ -58,7 +58,7 @@ void config_valid() {
         printf("[Config] Headset Volume is invalid\n");
     }
     if (body->sync_spk_headset_volume > 1) {
-        body->sync_spk_headset_volume = 0;
+        body->sync_spk_headset_volume = 1;
         printf("[Config] sync_spk_headset_volume is invalid\n");
     }
     if (body->speaker_gain < 0 || body->speaker_gain > 7) {
