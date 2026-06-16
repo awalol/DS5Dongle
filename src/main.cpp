@@ -184,9 +184,7 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
         const bool was_active = spk_active;
         printf("[AUDIO] Set interface Speaker to alternate setting %d\n", alt);
         spk_active = alt;
-        if (was_active && !alt) {
-            state_restore_idle_lights();
-        }
+        state_note_speaker_alt(was_active, alt);
     }
     if (itf == 2) { // ITF_NUM_AUDIO_STREAMING_IN (microphone)
         printf("[AUDIO] Set interface Microphone to alternate setting %d\n", alt);
@@ -206,6 +204,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         return;
     }
 #endif
+
     (void) itf;
     (void) report_id;
     (void) report_type;
@@ -326,6 +325,7 @@ int main() {
         wake_task();
         audio_loop();
         interrupt_loop();
+        state_post_game_task();
 #if ENABLE_BATT_LED
         battery_led_tick();
 #endif

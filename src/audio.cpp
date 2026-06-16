@@ -200,7 +200,7 @@ void __not_in_flash_func(audio_loop)() {
         // SetStateData
         pkt[11] = 0x10 | 0 << 6 | 1 << 7;
         pkt[12] = 63;
-        state_set(pkt + 13,63);
+        state_embed_for_audio(pkt + 13, 63);
         // Haptics Audio Data
         pkt[76] = 0x12 | 0 << 6 | 1 << 7;
         pkt[77] = SAMPLE_SIZE;
