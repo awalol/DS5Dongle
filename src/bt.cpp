@@ -355,6 +355,18 @@ void bt_inquiring_led() {
     }
 }
 
+// True if BTstack has at least one stored controller link key.
+static bool bt_has_stored_link_key() {
+    btstack_link_key_iterator_t it;
+    if (!gap_link_key_iterator_init(&it)) return false;
+    bd_addr_t addr;
+    link_key_t key;
+    link_key_type_t type;
+    const bool has_key = gap_link_key_iterator_get_next(&it, addr, key, &type);
+    gap_link_key_iterator_done(&it);
+    return has_key;
+}
+
 static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
     (void) channel;
 
@@ -365,10 +377,16 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             const uint8_t state = btstack_event_state_get_state(packet);
             printf("[BT] State: %u\n", state);
             if (state == HCI_STATE_WORKING) {
-                printf("[BT] Stack ready, start inquiry\n");
                 bt_blacklist_load();
-                gap_inquiry_start(30);
-                bt_inquiring = true;
+                // Only inquire on boot when no controller is paired; a stored
+                // controller reconnects on its own via page scan.
+                if (bt_has_stored_link_key()) {
+                    printf("[BT] Stack ready, stored controller -> page scan, no inquiry\n");
+                } else {
+                    printf("[BT] Stack ready, no stored controller -> start inquiry\n");
+                    gap_inquiry_start(30);
+                    bt_inquiring = true;
+                }
             }
             break;
         }
@@ -605,8 +623,10 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             battery_led_on_disconnect();
 #endif
             printf("[HCI] Disconnected reason=0x%02X\n", reason);
-            gap_inquiry_start(30);
-            bt_inquiring = true;
+            // No inquiry on disconnect: page scan (above) handles reconnect of a
+            // paired controller; discovering a new one is the explicit BOOTSEL
+            // single-click.
+            bt_inquiring = false;
             break;
         }
 

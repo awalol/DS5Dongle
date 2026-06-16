@@ -50,28 +50,38 @@ You have two options:
 
 ***You may need to replug the Pico when the controller is in pairing mode.***
 
+Once a controller has been paired, the dongle reconnects to it **silently**: it
+stays in Bluetooth page scan, and the controller links back on its own when you
+turn it on (press **PS**) — no inquiry, and the onboard LED stays dark. The dongle
+only runs a discovery scan (with the LED blinking) when **no controller is paired**,
+or when you explicitly start one with a BOOTSEL **single click**. A power-off, idle
+timeout, sleep, restart, or dongle reboot therefore no longer kicks off a
+30-second pairing scan the way it used to.
+
 ### BOOTSEL button: switch, reboot, or clear controllers
 
-While the firmware is running, the Pico's **BOOTSEL button** doubles as a
-controller and reset control — no unplugging or re-flashing needed:
+While the firmware is running, the Pico's **BOOTSEL button** also manages paired
+controllers and resets the dongle — no unplugging or re-flashing needed:
 
 - **Short press (click):**
-  - If a controller is connected, the current one is disconnected (its pairing is
-    kept, so it can reconnect later). Use this to free the dongle for a different
-    already-paired controller.
-  - If nothing is connected, a 30-second scan starts to pair a new controller.
-    Put the DualSense into pairing mode (hold **PS + Create/Share** until the
-    light bar flashes) while the scan runs.
-- **Double click:** **Reboot the Pico** — a normal firmware restart: re-enters
-  pairing inquiry, drops the current connection, and recovers from a transient
-  glitch. (Clicks register after a brief pause, to allow for a second/third click.)
+  - **While a controller is connected** — disconnects it (pairing kept). The
+    dongle goes quiet and stays connectable, so a different already-paired
+    controller can take over.
+  - **While nothing is connected** — starts a 30-second pairing scan (put the new
+    controller into **PS + Create/Share** mode while the LED blinks).
+- **Double click:** **Reboot the Pico** — a normal firmware restart that drops the
+  current connection and recovers from a transient glitch. It re-enters pairing
+  inquiry **only if no controller is paired**; with a controller already in memory
+  it boots quietly and waits for that controller to reconnect on its own (no
+  inquiry, no LED blink).
 - **Triple click:** **Reboot into BOOTSEL** — the dongle re-enumerates as a USB
   mass-storage drive so you can drag on a new `.uf2`, without holding BOOTSEL while
   plugging in.
 - **Long press (~1.5 s):** Disconnect and **forget every paired controller** — all
   stored pairings are deleted and blacklisted so they won't silently auto-reconnect,
-  even across a power cycle. The onboard LED flashes six times to confirm. To use a
-  forgotten controller again, put it back into **PS + Create/Share** pairing mode.
+  even across a power cycle. The onboard LED flashes six times to confirm. To pair a
+  controller again, start a scan with a **single click** (or replug the dongle) and
+  put it into **PS + Create/Share** pairing mode.
 
 > Triple click is a software path into the bootloader; you can also still enter it
 > the hardware way by holding BOOTSEL **while plugging in** the Pico (see
