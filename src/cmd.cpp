@@ -17,10 +17,80 @@
 #include "audio.h"
 
 // spk_active (main.cpp) + audio_mic_active() (audio.cpp) are surfaced in the
-// 0xf9 command response so the config UI can display the real gated mic/speaker
+// 0xf9 feature report so the config UI can display the real gated mic/speaker
 // state, reflecting the disable_mic / disable_speaker settings.
 extern bool spk_active;
 extern std::unordered_map<uint8_t, std::vector<uint8_t> > feature_data;
+
+bool is_pico_cmd(uint8_t report_id) {
+    return report_id == 0xf6 ||
+           report_id == 0xf7 ||
+           report_id == 0xf8 ||
+           report_id == 0xf9;
+}
+
+uint16_t pico_cmd_get(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
+    if (report_id == 0xf7) {
+        printf("[HID] Receive 0xf7 getting config\n");
+        if (sizeof(Config_body) > reqlen) {
+            printf("[Config] Warning: Config_body overflow\n");
+        }
+        const auto len = std::min(sizeof(Config_body), static_cast<size_t>(reqlen));
+        memcpy(buffer, &get_config(), len);
+        return len;
+    }
+    if (report_id == 0xf8) {
+        printf("[HID] Receive 0xf8 getting firmware version\n");
+        const auto len = std::min(strlen(PICO_PROGRAM_VERSION_STRING), static_cast<size_t>(reqlen));
+        memcpy(buffer, PICO_PROGRAM_VERSION_STRING, len);
+        return len;
+    }
+    if (report_id == 0xf9) {
+        int8_t rssi = 0;
+        bt_get_signal_strength(&rssi);
+        if (reqlen == 0) {
+            return 0;
+        }
+        buffer[0] = rssi;
+        if (reqlen >= 2) {
+            uint8_t flags = 0x80;
+            if (audio_mic_active() && !get_config().disable_mic) flags |= 0x01;
+            if (spk_active && !get_config().disable_speaker) flags |= 0x02;
+            buffer[1] = flags;
+            return 2;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
+    (void) report_id;
+    if (bufsize == 0) {
+        return;
+    }
+
+    if (buffer[0] == 0x01) {
+#if ENABLE_VERBOSE
+        printf("[CMD] Enter config set func\n");
+#endif
+        set_config(buffer + 1, bufsize - 1);
+    }
+    if (buffer[0] == 0x02) {
+        printf("[CMD] Enter config save func\n");
+        config_save();
+    }
+    if (buffer[0] == 0x03) {
+        printf("[CMD] Enter tud reconnect func\n");
+        tud_disconnect();
+        sleep_ms(150);
+        tud_connect();
+    }
+    if (buffer[0] == 0x04) {
+        printf("[CMD] Reboot to BOOTSEL (USB bootloader)\n");
+        reset_usb_boot(0, 0);
+    }
+}
 
 template<typename T>
 static bool read_config_value(T &value, uint8_t const *buffer, uint16_t bufsize) {
@@ -201,16 +271,11 @@ static bool get_config_field(uint8_t field_id, uint8_t *buffer, uint16_t bufsize
     }
 }
 
-void pico_cmd_set(uint8_t cmd_id, uint8_t const *buffer, uint16_t bufsize) {
-    // 0x01 update config field in variable: field_id + typed value
-    // 0x02 write config to flash
-    // 0x03 reconnect tinyusb device;
-    // 0x04 query config field: field_id (0x00 = config_version)
-
+void pico_cmd_legacy_set(uint8_t cmd_id, uint8_t const *buffer, uint16_t bufsize) {
     switch (cmd_id) {
         case 0x01: {
 #if ENABLE_VERBOSE
-            printf("[CMD] Enter config set func\n");
+            printf("[CMD] Enter legacy config set func\n");
 #endif
             bool success = false;
             if (bufsize < 1) {
@@ -274,14 +339,9 @@ void pico_cmd_set(uint8_t cmd_id, uint8_t const *buffer, uint16_t bufsize) {
             uint8_t buf[63]{};
             buf[0] = 0x66;
             buf[1] = 0x06;
-            // [-128,0]
             int8_t rssi = 0;
             bt_get_signal_strength(&rssi);
             buf[2] = rssi;
-            // byte 3: real audio gating state, for the config UI to display.
-            //   bit7 = valid marker
-            //   bit0 = controller mic actually streaming (host opened it AND !disable_mic)
-            //   bit1 = controller speaker actually driven (host opened it AND !disable_speaker)
             uint8_t flags = 0x80;
             if (audio_mic_active() && !get_config().disable_mic) flags |= 0x01;
             if (spk_active && !get_config().disable_speaker) flags |= 0x02;
@@ -289,13 +349,5 @@ void pico_cmd_set(uint8_t cmd_id, uint8_t const *buffer, uint16_t bufsize) {
             feature_data[0x81].assign(buf, buf + sizeof(buf));
             break;
         }
-        /*case 0x07: {
-            // Reboot into BOOTSEL (USB mass-storage bootloader) so the dongle can be
-            // reflashed from the host without the physical BOOTSEL button. The
-            // controller's enumeration is unchanged -- this is just a host command.
-            printf("[CMD] Reboot to BOOTSEL (USB bootloader)\n");
-            reset_usb_boot(0, 0); // noreturn
-            break;
-        }*/
     }
 }

@@ -385,8 +385,8 @@ uint8_t descriptor_configuration[] = {
     0x00, // bCountryCode: Not localized
     0x01, // bNumDescriptors: 1 report descriptor
     0x22, // bDescriptorType: Report
-    0x21, 0x01, // wDescriptorLength: 289 (0x0121) DS
-    // 0x95, 0x01, // wDescriptorLength: 405 (0x0195) DSE
+    0x41, 0x01, // wDescriptorLength: 321 (0x0141) DS
+    // 0xB5, 0x01, // wDescriptorLength: 437 (0x01B5) DSE
 
     // Endpoint Descriptor (HID IN: EP4)
     0x07, // bLength
@@ -462,9 +462,9 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     descriptor_configuration[offset - 1] = bInterval;
     descriptor_configuration[offset - 8] = bInterval;
     if (ds_mode()) {
-        descriptor_configuration[offset - 16] = 0x21;
+        descriptor_configuration[offset - 16] = 0x41;
     }else {
-        descriptor_configuration[offset - 16] = 0x95;
+        descriptor_configuration[offset - 16] = 0xB5;
     }
 
     // Wake / Game Bar are runtime features. Advertise REMOTE_WAKEUP only when wake is
@@ -627,11 +627,27 @@ uint8_t const desc_hid_report_ds[] = {
     0x09, 0x36, //   Usage (0x36)
     0x95, 0x03, //   Report Count (3)
     0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xF6, //   Report ID (-10)
+    0x09, 0x37, //   Usage (0x37)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xF7, //   Report ID (-9)
+    0x09, 0x38, //   Usage (0x38)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xF8, //   Report ID (-8)
+    0x09, 0x39, //   Usage (0x39)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xF9, //   Report ID (-7)
+    0x09, 0x3A, //   Usage (0x3A)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
     0xC0, // End Collection
 
-    // 289 bytes
+    // 321 bytes
 };
-static_assert(sizeof(desc_hid_report_ds) == 289);
+static_assert(sizeof(desc_hid_report_ds) == 321);
 
 uint8_t const desc_hid_report_dse[] = {
     0x05, 0x01, // Usage Page (Generic Desktop Ctrls)
@@ -833,10 +849,26 @@ uint8_t const desc_hid_report_dse[] = {
     0x85, 0x7B, //   Report ID (123)
     0x09, 0x53, //   Usage (0x53)
     0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xF6, //   Report ID (-10)
+    0x09, 0x37, //   Usage (0x37)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xF7, //   Report ID (-9)
+    0x09, 0x38, //   Usage (0x38)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xF8, //   Report ID (-8)
+    0x09, 0x39, //   Usage (0x39)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xF9, //   Report ID (-7)
+    0x09, 0x3A, //   Usage (0x3A)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
     0xC0, // End Collection
-    // 405 bytes
+    // 437 bytes
 };
-static_assert(sizeof(desc_hid_report_dse) == 405);
+static_assert(sizeof(desc_hid_report_dse) == 437);
 
 #ifdef ENABLE_WAKE_HID
 // 41-byte boot-keyboard report descriptor (modifier byte + reserved + 6 keycodes,

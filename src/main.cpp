@@ -150,10 +150,11 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     }
 #endif
     (void) itf;
-    (void) report_id;
     (void) report_type;
-    (void) buffer;
-    (void) reqlen;
+
+    if (is_pico_cmd(report_id)) {
+        return pico_cmd_get(report_id, buffer, reqlen);
+    }
 
     // DSE profiles: while the unlock + prefetch is still in progress, return 0
     // (NAK) for profile reads so the PS app retries rather than caching an
@@ -206,10 +207,15 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 #endif
 
     (void) itf;
-    (void) report_id;
     (void) report_type;
-    (void) buffer;
-    (void) bufsize;
+
+    if (is_pico_cmd(report_id)) {
+#if ENABLE_VERBOSE
+        printf("[HID] Receive 0x%02X config command funcid:0x%02X\n", report_id, buffer[0]);
+#endif
+        pico_cmd_set(report_id, buffer, bufsize);
+        return;
+    }
 
     // INTERRUPT OUT
     if (report_id == 0) {
@@ -239,7 +245,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 #endif
 
         // 0x80 0x66 cmd_id payload...
-        pico_cmd_set(buffer[1], buffer + 2, bufsize - 2);
+        pico_cmd_legacy_set(buffer[1], buffer + 2, bufsize - 2);
         return;
     }
     if (report_id == 0x80 ||
