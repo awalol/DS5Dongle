@@ -74,8 +74,7 @@ controllers and resets the dongle — no unplugging or re-flashing needed:
   current connection and recovers from a transient glitch. It re-enters pairing
   inquiry **only if no controller is paired**; with a controller already in memory
   it boots quietly and waits for that controller to reconnect on its own (no
-  inquiry, no LED blink). (Clicks register after a brief pause, to allow for a
-  second/third click.)
+  inquiry, no LED blink).
 - **Triple click:** **Reboot into BOOTSEL** — the dongle re-enumerates as a USB
   mass-storage drive so you can drag on a new `.uf2`, without holding BOOTSEL while
   plugging in.
