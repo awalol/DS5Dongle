@@ -39,6 +39,13 @@ void state_init() {
     state.VolumeHeadphones = get_config().headset_volume;
     set_volume(get_config().speaker_volume,get_config().headset_volume);
     set_gain(get_config().speaker_gain);
+
+    // Deliberately leave the light bar to the controller's own default: clear
+    // the colour/fade/brightness flags so the connect report doesn't claim the
+    // RGB strip.
+    state.AllowLedColor = 0;
+    state.AllowColorLightFadeAnimation = 0;
+    state.AllowLightBrightnessChange = 0;
 }
 
 void state_set(uint8_t *data, const uint8_t size) {
