@@ -109,6 +109,10 @@ bool bt_disconnect() {
     return true;
 }
 
+bool bt_is_connected(void) {
+    return hid_interrupt_cid != 0;
+}
+
 void bt_get_signal_strength(int8_t *rssi) {
     // gap_read_rssi() completes asynchronously, so this function can only
     // return the last cached RSSI value. Trigger a refresh afterwards so a
@@ -744,6 +748,12 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                     report32[2] = 0x10 | 0 << 6 | 1 << 7;
                     report32[3] = 0x3f; // 63 bytes
                     state_set(report32 + 4,sizeof(SetStateData));
+                    // Connect-only: don't claim the light bar on the first report;
+                    // persistent state keeps Allow* flags so host/game lighting still works.
+                    auto *connect_state = reinterpret_cast<SetStateData *>(report32 + 4);
+                    connect_state->AllowLedColor = 0;
+                    connect_state->AllowColorLightFadeAnimation = 0;
+                    connect_state->AllowLightBrightnessChange = 0;
                     bt_write(report32, sizeof(report32));
 
                     const auto mtu = l2cap_get_remote_mtu_for_local_cid(hid_interrupt_cid);

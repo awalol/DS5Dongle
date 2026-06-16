@@ -181,8 +181,12 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
     uint8_t const alt = tu_u16_low(p_request->wValue); // bAlternateSetting
 
     if (itf == 1) {
+        const bool was_active = spk_active;
         printf("[AUDIO] Set interface Speaker to alternate setting %d\n", alt);
         spk_active = alt;
+        if (was_active && !alt) {
+            state_restore_idle_lights();
+        }
     }
     if (itf == 2) { // ITF_NUM_AUDIO_STREAMING_IN (microphone)
         printf("[AUDIO] Set interface Microphone to alternate setting %d\n", alt);

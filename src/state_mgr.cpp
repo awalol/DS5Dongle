@@ -9,6 +9,9 @@
 
 #include "config.h"
 #include "utils.h"
+#include "bt.h"
+
+extern int reportSeqCounter;
 
 namespace {
     constexpr size_t kAudioControlOffset = offsetof(SetStateData, MuteLightMode) - sizeof(uint8_t);
@@ -39,13 +42,6 @@ void state_init() {
     state.VolumeHeadphones = get_config().headset_volume;
     set_volume(get_config().speaker_volume,get_config().headset_volume);
     set_gain(get_config().speaker_gain);
-
-    // Deliberately leave the light bar to the controller's own default: clear
-    // the colour/fade/brightness flags so the connect report doesn't claim the
-    // RGB strip.
-    state.AllowLedColor = 0;
-    state.AllowColorLightFadeAnimation = 0;
-    state.AllowLightBrightnessChange = 0;
 }
 
 void state_set(uint8_t *data, const uint8_t size) {
@@ -193,4 +189,41 @@ void set_volume(const uint8_t speaker,const uint8_t headset) {
 void set_gain(const uint8_t value) {
     state.SpeakerCompPreGain = value;
     state.BeamformingEnable = true;
+}
+
+static void push_setstate_report(const SetStateData *payload, const bool pulse_reset_lights)
+{
+    if (!bt_is_connected()) {
+        return;
+    }
+    uint8_t outputData[78]{};
+    outputData[0] = 0x31;
+    outputData[1] = static_cast<uint8_t>(reportSeqCounter << 4);
+    if (++reportSeqCounter == 256) {
+        reportSeqCounter = 0;
+    }
+    outputData[2] = 0x10;
+    memcpy(outputData + 3, payload, sizeof(SetStateData));
+    if (pulse_reset_lights) {
+        outputData[4] |= static_cast<uint8_t>(1u << 3);
+    }
+    bt_write(outputData, sizeof(outputData));
+}
+
+void state_restore_idle_lights(void)
+{
+    if (!bt_is_connected()) {
+        return;
+    }
+    state_init();
+    SetStateData idle{};
+    memcpy(&idle, &state, sizeof(SetStateData));
+    idle.AllowLedColor = 1;
+    idle.AllowColorLightFadeAnimation = 1;
+    idle.AllowLightBrightnessChange = 1;
+
+    push_setstate_report(&idle, true);
+    idle.ResetLights = 0;
+    push_setstate_report(&idle, false);
+    memcpy(&state, &idle, sizeof(SetStateData));
 }
