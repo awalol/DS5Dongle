@@ -78,7 +78,9 @@ void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
     }
     if (buffer[0] == 0x02) {
         printf("[CMD] Enter config save func\n");
-        config_save();
+        if (config_save()) {
+            config_schedule_usb_reconnect_if_layout_changed();
+        }
     }
     if (buffer[0] == 0x03) {
         printf("[CMD] Enter tud reconnect func\n");

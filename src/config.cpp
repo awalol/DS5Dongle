@@ -13,12 +13,24 @@
 #include "hardware/sync.h"
 #include "pico/cyw43_arch.h"
 #include "pico/flash.h"
+#include "pico/time.h"
+#include "device/usbd.h"
 
 constexpr uint32_t CONFIG_MAGIC = 0x66ccff00;
 constexpr uint16_t CONFIG_VERSION = 4;
 constexpr uint32_t CONFIG_FLASH_OFFSET = PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE;
 static Config config{};
 bool is_dse = false;
+
+#ifdef ENABLE_WAKE_HID
+static bool enum_kbd_layout = false;
+static bool enum_wake_layout = false;
+static bool pending_usb_reconnect = false;
+
+static bool config_kbd_layout(const Config_body &body) {
+    return body.enable_wake || body.ps_shortcut_enabled;
+}
+#endif
 
 // 编译期保护
 // 判断Config结构体是否能放进flash 256bytes
@@ -161,6 +173,34 @@ bool config_save() {
 
 Config_body& get_config() {
     return config.body;
+}
+
+void config_note_usb_enumerated_layout(void) {
+#ifdef ENABLE_WAKE_HID
+    enum_kbd_layout = config_kbd_layout(config.body);
+    enum_wake_layout = config.body.enable_wake;
+#endif
+}
+
+void config_schedule_usb_reconnect_if_layout_changed(void) {
+#ifdef ENABLE_WAKE_HID
+    if (config_kbd_layout(config.body) != enum_kbd_layout ||
+        config.body.enable_wake != enum_wake_layout) {
+        pending_usb_reconnect = true;
+    }
+#endif
+}
+
+void config_usb_reconnect_task(void) {
+#ifdef ENABLE_WAKE_HID
+    if (!pending_usb_reconnect) {
+        return;
+    }
+    pending_usb_reconnect = false;
+    tud_disconnect();
+    sleep_ms(150);
+    tud_connect();
+#endif
 }
 
 void set_config(const uint8_t *new_config, const uint16_t len) {

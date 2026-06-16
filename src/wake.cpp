@@ -146,6 +146,7 @@ extern "C" void tud_mount_cb(void) {
     WAKE_DBG("tud_mount_cb state=%s", wake_state_name(state));
     host_suspended = false;
     host_resumed_event = true;
+    config_note_usb_enumerated_layout();
 }
 
 void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {

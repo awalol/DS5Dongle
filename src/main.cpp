@@ -140,7 +140,15 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
 // Return zero will cause the stack to STALL request
 uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer,
                                uint16_t reqlen) {
+    (void) report_type;
+
+    if (is_pico_cmd(report_id)) {
+        return pico_cmd_get(report_id, buffer, reqlen);
+    }
+
 #ifdef ENABLE_WAKE_HID
+    // Wake keyboard is a second HID interface; WebHID may open it instead of
+    // the gamepad after enable_wake adds it to the composite descriptor.
     if (itf == 1) {
         if (reqlen >= 8) {
             memset(buffer, 0, 8);
@@ -150,11 +158,6 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     }
 #endif
     (void) itf;
-    (void) report_type;
-
-    if (is_pico_cmd(report_id)) {
-        return pico_cmd_get(report_id, buffer, reqlen);
-    }
 
     // DSE profiles: while the unlock + prefetch is still in progress, return 0
     // (NAK) for profile reads so the PS app retries rather than caching an
@@ -199,14 +202,6 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
 // received data on OUT endpoint ( Report ID = 0, Type = 0 )
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
                            uint16_t bufsize) {
-#ifdef ENABLE_WAKE_HID
-    if (itf == 1) {
-        // Drop keyboard SET_REPORT (host LED state).
-        return;
-    }
-#endif
-
-    (void) itf;
     (void) report_type;
 
     if (is_pico_cmd(report_id)) {
@@ -216,6 +211,15 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         pico_cmd_set(report_id, buffer, bufsize);
         return;
     }
+
+#ifdef ENABLE_WAKE_HID
+    if (itf == 1) {
+        // Drop keyboard SET_REPORT (host LED state).
+        return;
+    }
+#endif
+
+    (void) itf;
 
     // INTERRUPT OUT
     if (report_id == 0) {
@@ -332,6 +336,7 @@ int main() {
         audio_loop();
         interrupt_loop();
         state_post_game_task();
+        config_usb_reconnect_task();
 #if ENABLE_BATT_LED
         battery_led_tick();
 #endif

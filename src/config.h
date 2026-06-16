@@ -43,6 +43,11 @@ void set_config(const uint8_t *new_config, const uint16_t len);
 void config_valid();
 void set_config(const Config_body &new_config);
 void set_gain(uint8_t value);
+// Record the wake/keyboard USB layout the host enumerated (call from tud_mount_cb).
+void config_note_usb_enumerated_layout(void);
+// After save, re-enumerate if wake/keyboard layout no longer matches the host.
+void config_schedule_usb_reconnect_if_layout_changed(void);
+void config_usb_reconnect_task(void);
 extern bool is_dse;
 
 #endif //DS5_BRIDGE_CONFIG_H
