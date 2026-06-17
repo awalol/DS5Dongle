@@ -16,4 +16,8 @@ bool audio_mic_active();
 void mic_add_queue(uint8_t *data, uint16_t len);
 void update_mic_status();
 
+// Re-push speaker/headset volume + controller audio subscription after BT or USB
+// resume (needed when wake suspend cycles power off the controller radio).
+void audio_resync_speaker_path(void);
+
 #endif //DS5_BRIDGE_AUDIO_H

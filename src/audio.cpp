@@ -24,6 +24,7 @@
 #include "config.h"
 #include "state_mgr.h"
 #include "usb.h"
+#include "bt.h"
 
 #define INPUT_CHANNELS    4
 #define OUTPUT_CHANNELS   2
@@ -95,6 +96,13 @@ void update_mic_status() {
     bt_write(pkt,sizeof(pkt));
 }
 
+void audio_resync_speaker_path(void) {
+    if (!bt_is_connected()) return;
+    set_volume(get_config().speaker_volume, get_config().headset_volume);
+    set_gain(get_config().speaker_gain);
+    update_mic_status();
+}
+
 void __not_in_flash_func(audio_loop)() {
     // Mic playback: drain decoded mic PCM into the USB IN endpoint
     static mic_decode_element mic_pb{};
@@ -130,6 +138,7 @@ void __not_in_flash_func(audio_loop)() {
     if (frames == 0) {
         return;
     }
+    state_note_game_audio();
 
     static float audio_buf[512 * 2];
     static uint audio_buf_pos = 0;

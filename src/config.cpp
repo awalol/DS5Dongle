@@ -28,7 +28,8 @@ static bool enum_wake_layout = false;
 static bool pending_usb_reconnect = false;
 
 static bool config_kbd_layout(const Config_body &body) {
-    return body.enable_wake || body.ps_shortcut_enabled;
+    // Keyboard is only for the Xbox Game Bar shortcut; wake uses the gamepad HID path.
+    return body.ps_shortcut_enabled;
 }
 #endif
 

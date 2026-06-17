@@ -127,9 +127,9 @@ tusb_desc_device_t desc_device =
 uint8_t const *tud_descriptor_device_cb(void) {
     desc_device.idProduct = ds_mode() ? 0x0CE6 : 0x0DF2;
     desc_device.iSerialNumber = get_config().disable_usb_sn ? 0x00 : 0x03;
-    // USB 2.1 (so the host requests the BOS / MS OS 2.0 selective-suspend opt-in)
-    // only when wake is enabled; plain USB 2.0 otherwise.
-    desc_device.bcdUSB = get_config().enable_wake ? 0x0210 : 0x0200;
+    // Stay on USB 2.0. USB 2.1 + BOS/MS OS selective-suspend breaks Windows speaker
+    // routing on this composite; wake only needs REMOTE_WAKEUP in the config descriptor.
+    desc_device.bcdUSB = 0x0200;
     return reinterpret_cast<uint8_t const *>(&desc_device);
 }
 
@@ -467,11 +467,10 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
         descriptor_configuration[offset - 16] = 0xB5;
     }
 
-    // Wake / Game Bar are runtime features. Advertise REMOTE_WAKEUP only when wake is
-    // on, and include the keyboard interface (the LAST descriptor block) only when wake
-    // OR the Game Bar shortcut is on. With both off this is byte-identical to the base.
+    // Wake uses the existing gamepad HID + USB remote wakeup (no extra interface).
+    // The keyboard block is only for the Xbox Game Bar shortcut.
     const bool wake = get_config().enable_wake;
-    const bool kbd = wake || get_config().ps_shortcut_enabled;
+    const bool kbd = get_config().ps_shortcut_enabled;
     descriptor_configuration[7] = wake ? 0xE0 : 0xC0; // bmAttributes (REMOTE_WAKEUP bit)
     const uint16_t total = kbd ? CONFIG_DESC_LEN_TOTAL
                                : (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_WAKE_KBD);
@@ -906,7 +905,7 @@ _Static_assert(sizeof(desc_hid_report_kbd) == 45, "keyboard report descriptor le
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
 #ifdef ENABLE_WAKE_HID
-    // HID instance 1 is the wake-only boot keyboard added by ENABLE_WAKE_HID.
+    // HID instance 1 is the boot keyboard for the Xbox Game Bar shortcut.
     if (itf == 1) return desc_hid_report_kbd;
 #endif
     (void) itf;
@@ -987,21 +986,10 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 //--------------------------------------------------------------------+
 // Microsoft OS 2.0 descriptors (carried via BOS).
 //
-// Why this is here: the dongle is a composite device with USB Audio Class
-// interfaces. By default Windows audio engine policy keeps USB audio devices
-// at D0 even during system S3, blocking selective-suspend for the whole
-// composite. Without selective-suspend the device never enters USB suspend,
-// so tud_remote_wakeup() never works -- breaking wake-on-PS.
-//
-// MS OS 2.0 lets us tell Windows "yes, please selective-suspend this audio
-// function": we set the registry property "SelectiveSuspendEnabled" = 1 on
-// the audio function (interface 0). This causes Windows to write
-//   HKLM\SYSTEM\CurrentControlSet\Enum\USB\<VID&PID>\<instance>
-//        \Device Parameters\SelectiveSuspendEnabled = 1
-// at enumeration time, opting our audio function in to selective suspend
-// without breaking haptics.
-//
-// Reference: "Microsoft OS 2.0 Descriptors Specification".
+// MS OS 2.0 / BOS (DISABLED): selective-suspend registry on any composite function
+// breaks controller speaker audio while haptics still work. Wake uses only the
+// REMOTE_WAKEUP bit (bmAttributes 0xE0) -- no BOS, no USB 2.1, no registry keys.
+// The descriptor tables below are kept for reference but are not served at runtime.
 //--------------------------------------------------------------------+
 
 #define MS_OS_20_VENDOR_CODE 0x01
@@ -1022,10 +1010,8 @@ uint8_t const desc_bos[] = {
 };
 
 uint8_t const *tud_descriptor_bos_cb(void) {
-    // BOS carries the MS OS 2.0 selective-suspend opt-in, only meaningful for wake.
-    // When wake is off the device is USB 2.0 and the host won't ask -- guard anyway.
-    if (!get_config().enable_wake) return nullptr;
-    return desc_bos;
+    (void) get_config().enable_wake;
+    return nullptr;
 }
 
 uint8_t const desc_ms_os_20[] = {
@@ -1042,12 +1028,12 @@ uint8_t const desc_ms_os_20[] = {
     0x00,                                                     // bReserved
     U16_TO_U8S_LE(MS_OS_20_DESC_LEN - 0x0A),                  // wTotalLength of this subset
 
-    // --- Function Subset for the Audio function (8 bytes) ---
-    // Audio Control is interface 0; AudioStreaming OUT/IN are 1/2 -- this
-    // subset covers all three because they belong to the same function.
+    // --- Function Subset for the gamepad HID function (8 bytes) ---
+    // ITF_NUM_HID (interface 3): do NOT target audio (interface 0) -- that
+    // breaks speaker playback while leaving haptics channels alive.
     U16_TO_U8S_LE(0x0008),                                    // wLength
     U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),           // wDescriptorType
-    0x00,                                                     // bFirstInterface (audio control)
+    ITF_NUM_HID,                                              // bFirstInterface (gamepad HID)
     0x00,                                                     // bReserved
     U16_TO_U8S_LE(MS_OS_20_DESC_LEN - 0x0A - 0x08),           // wSubsetLength
 
@@ -1069,13 +1055,9 @@ TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == MS_OS_20_DESC_LEN, "MS OS 2.0 descript
 // platform capability, then issues this vendor request to fetch the
 // descriptor set itself.
 bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
-    if (!get_config().enable_wake) return false;
-    if (stage != CONTROL_STAGE_SETUP) return true;
-    if (request->bmRequestType_bit.type != TUSB_REQ_TYPE_VENDOR) return false;
-    if (request->bRequest == MS_OS_20_VENDOR_CODE && request->wIndex == 7) {
-        // wIndex == 7 -> MS_OS_20_DESCRIPTOR_INDEX
-        return tud_control_xfer(rhport, request, (void *)(uintptr_t)desc_ms_os_20, sizeof(desc_ms_os_20));
-    }
+    (void) rhport;
+    (void) stage;
+    (void) request;
     return false;
 }
 #endif // ENABLE_WAKE_HID

@@ -15,6 +15,9 @@ void set_volume(uint8_t speaker, uint8_t headset);
 
 // Speaker USB alt changed: schedule post-game light restore when stream closes.
 void state_note_speaker_alt(bool was_active, bool now_active);
+void state_note_game_audio(void);
+void state_note_usb_suspend(void);
+void state_on_host_usb_resume(void);
 void state_post_game_task(void);
 
 #endif //DS5_BRIDGE_STATE_MGR_H

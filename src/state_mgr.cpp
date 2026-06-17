@@ -44,6 +44,21 @@ namespace {
     constexpr size_t kPlayerIndicatorsOffset = offsetof(SetStateData, LedRed) - sizeof(uint8_t);
 
     absolute_time_t post_game_lights_at = nil_time;
+    absolute_time_t wake_lights_grace_until = nil_time;
+    bool game_audio_active = false;
+    bool host_usb_suspended = false;
+
+    constexpr uint32_t kWakeLightsGraceMs = 15000;
+
+    bool wake_lights_grace_active(void)
+    {
+        return !is_nil_time(wake_lights_grace_until) && !time_reached(wake_lights_grace_until);
+    }
+
+    bool in_game_light_mode(void)
+    {
+        return spk_active || game_audio_active || wake_lights_grace_active();
+    }
 
     void clear_light_allows(SetStateData *payload)
     {
@@ -146,7 +161,7 @@ void state_embed_for_audio(uint8_t *data, const uint8_t size)
         printf("[StateMgr] Warning: State embed over %u bytes\n", kSetStateSize);
     }
     memcpy(data, &state, size);
-    if (!spk_active) {
+    if (!in_game_light_mode()) {
         clear_light_allows(reinterpret_cast<SetStateData *>(data));
     }
 }
@@ -293,16 +308,43 @@ void state_note_speaker_alt(const bool was_active, const bool now_active)
 {
     if (now_active) {
         post_game_lights_at = nil_time;
+        wake_lights_grace_until = nil_time;
         return;
     }
     if (was_active) {
-        post_game_lights_at = make_timeout_time_ms(kPostGameLightDelayMs);
+        game_audio_active = false;
+        // S3/selective suspend closes the speaker alt — not a game exit.
+        if (!host_usb_suspended) {
+            post_game_lights_at = make_timeout_time_ms(kPostGameLightDelayMs);
+        }
     }
+}
+
+void state_note_game_audio(void)
+{
+    game_audio_active = true;
+    wake_lights_grace_until = nil_time;
+}
+
+void state_note_usb_suspend(void)
+{
+    host_usb_suspended = true;
+    post_game_lights_at = nil_time;
+}
+
+void state_on_host_usb_resume(void)
+{
+    host_usb_suspended = false;
+    post_game_lights_at = nil_time;
+    spk_active = false;
+    game_audio_active = false;
+    wake_lights_grace_until = make_timeout_time_ms(kWakeLightsGraceMs);
 }
 
 void state_post_game_task(void)
 {
-    if (spk_active || is_nil_time(post_game_lights_at) || !time_reached(post_game_lights_at)) {
+    if (in_game_light_mode() || is_nil_time(post_game_lights_at) ||
+        !time_reached(post_game_lights_at)) {
         return;
     }
     post_game_lights_at = nil_time;

@@ -161,9 +161,7 @@ Or download precompiled firmware from GitHub Actions.
 
 Wake-on-PS is now built into the standard firmware — there is no separate `feat/usb-wake` branch or `ds5-bridge-wake.uf2`
 build. It is **disabled by default**; turn it on with the **Wake PC from sleep on PS button** toggle in the
-[web config](#configuration). When enabled, the dongle presents a HID keyboard interface and advertises USB remote
-wakeup so a controller button can wake the PC; when disabled, that interface is not enumerated. See
-[Wake-on-PS](#wake-on-ps-optional) for setup.
+[web config](#configuration). When enabled, the dongle advertises USB remote wakeup on the gamepad interface; when disabled, wake descriptors are not advertised. See [Wake-on-PS](#wake-on-ps-optional) for setup.
 
 It is recommended to read #60 and #61 before using this feature.
 
@@ -242,54 +240,28 @@ headers, the script asks to install the complete `gcc-arm-embedded` cask and poi
 ## Xbox Game Bar (optional)
 
 The **PS button = Xbox Game Bar** toggle in the [web config](#configuration) maps the controller's PS button to
-keyboard shortcuts, sent over the same HID keyboard interface used by [Wake-on-PS](#wake-on-ps-optional):
+keyboard shortcuts, sent over a separate HID keyboard interface (only when the shortcut toggle is enabled):
 
 - **Short press** (tap and release) → `Win`+`G`, which opens the **Xbox Game Bar** overlay.
 - **Long press** (hold ≥ 750 ms) → `Win`+`Tab`, which opens **Task View**.
 
-The toggle is off by default, and the keyboard interface is only enumerated while it (or wake) is enabled. Note this
+The toggle is off by default, and the keyboard interface is only enumerated while the Xbox Game Bar shortcut is enabled. Note this
 only *opens* the Game Bar: the DualSense is not an XInput gamepad, so Windows won't let the controller navigate the
 overlay — use a mouse or keyboard for that.
 
 ## Wake-on-PS (optional)
 
-Enabling the **Wake PC from sleep on PS button** toggle in the [web config](#configuration) makes the dongle present a
-second HID interface (a boot keyboard) and advertise USB remote wakeup. A controller button press while the host is
-suspended then injects an **F15** keypress, waking the PC from **S3 sleep**. F15 was chosen because it has no default
-Windows or app binding — a stray fire never inserts characters or triggers shortcuts. The toggle is off by default, and
-the keyboard interface is only enumerated while it (or the Xbox Game Bar shortcut) is enabled.
+Enabling the **Wake PC from sleep on PS button** toggle in the [web config](#configuration) advertises USB remote wakeup on the existing DualSense gamepad interface — no extra keyboard is added. A controller button press while the host is suspended sends a USB remote-wakeup signal, then forwards the real DS5 gamepad input report so Windows sees controller activity. The toggle is off by default.
 
-Scope: **S3 only.** Modern Standby (S0ix) is not supported. To check your machine, run `powercfg /a` — you need
-"Standby (S3)" listed under available sleep states.
+Scope: **S3 only.** Modern Standby (S0ix) is not supported. To check your machine, run `powercfg /a` — you need "Standby (S3)" listed under available sleep states.
 
-After enabling the toggle (then **Reconnect USB** so the interface re-enumerates):
+After enabling the toggle (then **Save** so USB re-enumerates with wake descriptors):
 
-1. Open Device Manager → the new **HID Keyboard Device** (and its parent **USB Composite Device**) → Properties → Power
-   Management → tick **"Allow this device to wake the computer."**
+1. Open Device Manager → **Wireless Controller** / **HID-compliant game controller** (and parent **USB Composite Device**) → Properties → Power Management → tick **"Allow this device to wake the computer."**
 2. Verify with `powercfg /devicequery wake_armed`.
 3. Sleep the PC; press any button on the controller; the PC should wake within ~1 s.
-4. After a wake, `powercfg /lastwake` should attribute the wake to the HID Keyboard Device.
 
-> Wake also needs `SelectiveSuspendEnabled = 1` (a `REG_DWORD`) on the controller's audio interface (`MI_00`). Windows
-> only writes it at first install, so a runtime toggle may need it set manually. It lives under each per-instance
-> `Device Parameters` key:
->
-> ```
-> HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_054C&PID_0CE6&MI_00\<instance>\Device Parameters
->     SelectiveSuspendEnabled    (REG_DWORD) = 1
-> ```
->
-> `PID_0CE6` is the DualSense (`PID_0DF2` for the Edge), and `<instance>` is device/port-specific (e.g.
-> `6&212078ea&1&0000`), so there can be more than one node — set it on every one. An elevated PowerShell one-liner that
-> covers all present instances:
->
-> ```powershell
-> Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Enum\USB\VID_054C&PID_0CE6&MI_00' | ForEach-Object {
->   New-ItemProperty "$($_.PSPath)\Device Parameters" SelectiveSuspendEnabled -Value 1 -PropertyType DWord -Force }
-> ```
->
-> Then Reconnect USB or reboot. (Re-installing the device — clearing its Windows device cache and replugging — also
-> makes Windows write the value itself.)
+> **Do not** set `SelectiveSuspendEnabled` on the audio (`MI_00`) or HID (`MI_03`) interfaces — older wake builds used MS OS 2.0 registry keys that break controller speaker audio. If present, remove them and re-enumerate USB.
 
 ## Roadmap
 

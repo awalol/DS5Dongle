@@ -25,7 +25,7 @@ struct __attribute__((packed)) Config_body {
     uint8_t ps_shortcut_enabled; // 0: disabled, 1: enabled (Xbox Game Bar via HID keyboard)
     uint8_t disable_mic; // bool: 0 enable (default), 1 disable controller mic
     uint8_t disable_speaker; // bool: 0 enable (default), 1 disable speaker/headset
-    uint8_t enable_wake; // bool: 0 disabled (default), 1 wake host on PS press (USB remote wakeup)
+    uint8_t enable_wake; // bool: 0 disabled (default), 1 wake host from DS5 input via USB remote wakeup
 };
 
 struct __attribute__((packed)) Config {
@@ -43,9 +43,9 @@ void set_config(const uint8_t *new_config, const uint16_t len);
 void config_valid();
 void set_config(const Config_body &new_config);
 void set_gain(uint8_t value);
-// Record the wake/keyboard USB layout the host enumerated (call from tud_mount_cb).
+// Record USB layout the host enumerated (call from tud_mount_cb).
 void config_note_usb_enumerated_layout(void);
-// After save, re-enumerate if wake/keyboard layout no longer matches the host.
+// After save, re-enumerate if keyboard shortcut or wake BOS layout changed.
 void config_schedule_usb_reconnect_if_layout_changed(void);
 void config_usb_reconnect_task(void);
 extern bool is_dse;

@@ -147,8 +147,8 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     }
 
 #ifdef ENABLE_WAKE_HID
-    // Wake keyboard is a second HID interface; WebHID may open it instead of
-    // the gamepad after enable_wake adds it to the composite descriptor.
+    // Game Bar shortcut keyboard (HID instance 1); WebHID may open it instead of
+    // the gamepad when ps_shortcut_enabled adds the second HID interface.
     if (itf == 1) {
         if (reqlen >= 8) {
             memset(buffer, 0, 8);
@@ -189,6 +189,9 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
         printf("[AUDIO] Set interface Speaker to alternate setting %d\n", alt);
         spk_active = alt;
         state_note_speaker_alt(was_active, alt);
+        if (alt && !was_active) {
+            audio_resync_speaker_path();
+        }
     }
     if (itf == 2) { // ITF_NUM_AUDIO_STREAMING_IN (microphone)
         printf("[AUDIO] Set interface Microphone to alternate setting %d\n", alt);
