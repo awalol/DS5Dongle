@@ -237,7 +237,8 @@ keyboard shortcuts, sent over the same HID keyboard interface used by [Wake-on-P
 - **Short press** (tap and release) → `Win`+`G`, which opens the **Xbox Game Bar** overlay.
 - **Long press** (hold ≥ 750 ms) → `Win`+`Tab`, which opens **Task View**.
 
-The toggle is off by default, and the keyboard interface is only enumerated while it (or wake) is enabled.
+The toggle is off by default, and the keyboard interface is only enumerated while it (or wake) is enabled. 
+> If the Game Bar overlay opens but does not respond to controller inputs, Windows may be missing the modern input stack. Installing or updating **Microsoft GameInput** will resolve this and restore controller navigation. You can install the service directly by opening an elevated command prompt and running `winget install Microsoft.GameInput`, or read the [official documentation](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/input/overviews/input-overview) for more details.
 
 ## Wake-on-PS (optional)
 
