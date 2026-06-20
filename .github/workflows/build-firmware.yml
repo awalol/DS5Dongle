@@ -185,7 +185,7 @@ jobs:
           echo "package-hash=$package_hash" >> "$GITHUB_OUTPUT"
 
       - name: Cache build dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.apt-cache.outputs.dir }}
           key: ${{ runner.os }}-${{ runner.arch }}-apt-${{ steps.apt-cache.outputs.os }}-${{ steps.apt-cache.outputs.package-hash }}
@@ -201,7 +201,7 @@ jobs:
 
       - name: Cache ARM toolchain
         id: cache-arm-toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.ARM_TOOLCHAIN_PATH }}
           key: ${{ runner.os }}-${{ runner.arch }}-arm-toolchain-${{ env.ARM_TOOLCHAIN_VERSION }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Cache Pico SDK
         id: cache-pico-sdk
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.PICO_SDK_PATH }}
           key: ${{ runner.os }}-${{ runner.arch }}-pico-sdk-${{ env.PICO_SDK_REF }}-tinyusb-${{ env.TINYUSB_REF }}
