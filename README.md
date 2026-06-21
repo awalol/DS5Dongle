@@ -28,7 +28,8 @@ This project enables the Raspberry Pi Pico2W (or other compatible board, e.g. th
 You have two options:
 
 - **Download a pre-built `.uf2`** — grab the newest
-  [Releases](../../releases) build (`ds5-bridge-*.uf2`). No tools needed.
+  [Releases](../../releases) build (`ds5-bridge.uf2`; other board builds are
+  bundled in `other board.zip`). No tools needed.
 - **Build it yourself** — see [Build Instructions](#build-instructions)
   below (Windows users get a one-command script).
 

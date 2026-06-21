@@ -3,7 +3,8 @@ name: Build firmware (reusable)
 # Reusable build used by build.yml and release.yml.
 # Builds enabled firmware variants through a matrix. Standard/debug always run;
 # Pico W, Waveshare and no-batt-led compile checks are optional. When
-# `upload_tag` is set, release UF2s are attached to that GitHub Release.
+# `upload_tag` is set, the standard UF2 and other-board ZIP are attached to
+# that GitHub Release.
 
 on:
   workflow_call:
@@ -306,16 +307,65 @@ jobs:
           # UF2s are uploaded with archive:false, so download them as raw files.
           skip-decompress: true
 
-      - name: Remove debug firmware before release upload
+      - name: Prepare release assets
+        env:
+          ASSET_SUFFIX: ${{ inputs.asset_suffix }}
         run: |
-          rm -f "artifacts/ds5-bridge-debug${{ inputs.asset_suffix }}.uf2"
+          set -euo pipefail
 
-      - name: Attach UF2s to release
+          rm -rf release-assets other-boards
+          mkdir -p release-assets other-boards
+
+          standard="artifacts/ds5-bridge${ASSET_SUFFIX}.uf2"
+          if [ ! -f "$standard" ]; then
+            echo "Missing standard firmware: $standard" >&2
+            exit 1
+          fi
+          cp "$standard" release-assets/ds5-bridge.uf2
+
+          shopt -s nullglob
+          for uf2 in artifacts/*.uf2; do
+            name="$(basename "$uf2")"
+            case "$name" in
+              "ds5-bridge${ASSET_SUFFIX}.uf2" | "ds5-bridge-debug${ASSET_SUFFIX}.uf2")
+                continue
+                ;;
+            esac
+            cp "$uf2" "other-boards/$name"
+          done
+
+          if compgen -G "other-boards/*.uf2" > /dev/null; then
+            (cd other-boards && zip -9 -q "../release-assets/other board.zip" ./*.uf2)
+          fi
+
+      - name: Remove legacy individual UF2 release assets
+        env:
+          ASSET_SUFFIX: ${{ inputs.asset_suffix }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          UPLOAD_TAG: ${{ inputs.upload_tag }}
+        run: |
+          set -euo pipefail
+
+          for name in \
+            "ds5-bridge${ASSET_SUFFIX}.uf2" \
+            "ds5-bridge-debug${ASSET_SUFFIX}.uf2" \
+            "ds5-bridge-picow${ASSET_SUFFIX}.uf2" \
+            "ds5-bridge-waveshare${ASSET_SUFFIX}.uf2"
+          do
+            if [ "$name" = "ds5-bridge.uf2" ]; then
+              continue
+            fi
+            gh release delete-asset "$UPLOAD_TAG" "$name" \
+              --repo "$GH_REPO" --yes 2>/dev/null || true
+          done
+
+      - name: Attach packaged assets to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Pin to the workflow's own repo: when inputs.repo is set we checked
           # out a different repo, so the local git remote must not decide this.
           gh release upload "${{ inputs.upload_tag }}" \
-            artifacts/*.uf2 \
+            release-assets/* \
             --repo "${{ github.repository }}" --clobber
