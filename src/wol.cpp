@@ -12,7 +12,21 @@
 #include <cstdio>
 #include <cstring>
 
+// WoL credentials live in secrets.h, which is gitignored (it holds the WiFi
+// password and must never be committed). For a working WoL build, provide it by
+// copying secrets.h.example to secrets.h and filling it in. When it is absent
+// (CI builds, or anyone who has not configured WoL yet) fall back to inert
+// placeholders so the firmware still compiles -- WoL simply will not wake
+// anything until a real secrets.h is supplied.
+#if __has_include("secrets.h")
 #include "secrets.h"
+#else
+#warning "secrets.h not found: building with placeholder WoL credentials. Copy src/secrets.h.example to src/secrets.h and fill it in for Wake-on-LAN to work."
+#define WIFI_SSID       "YOUR_SSID"
+#define WIFI_PASS       "YOUR_WIFI_PASSWORD"
+#define WOL_TARGET_MAC  "AA:BB:CC:DD:EE:FF"
+#define WOL_PORT        9
+#endif
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
 #include "tusb.h"
