@@ -21,7 +21,7 @@ $env:PATH = "$env:USERPROFILE\.pico-sdk\cmake\v3.31.5\bin;" +
 Copy-Item src\secrets.h.example src\secrets.h     # i edita src\secrets.h
 
 # 3) Configurar + compilar (produccio, WoL ON)
-cd "C:\Users\Arnau\Desktop\DS5dongle\DS5Dongle-0.7.2-hotfix"
+cd "C:\path\to\DS5Dongle-0.7.2-hotfix"
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_WOL=ON -DPICO_BOARD=pico2_w
 ninja -C build ds5-bridge
 # -> binari: build\ds5-bridge.uf2
@@ -80,7 +80,7 @@ Resultat: **`build\ds5-bridge.uf2`**.
 
 | Opció | Defecte | Efecte |
 |-------|---------|--------|
-| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus es queda a flash** (allibera ~280 KB RAM) |
+| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus CELT-encode rellocat a RAM** (selectiu, ~87 KB → àudio perfecte, ~276 KB heap lliure). Vegeu CONTEXT.md §3.4 |
 | `ENABLE_SERIAL` | OFF | Consola USB CDC per a `printf` (canvia l'USB; desactiva el watchdog) |
 | `ENABLE_VERBOSE` | OFF | Logs BTstack detallats |
 | `ENABLE_BATT_LED` | ON | LED de bateria baixa |
@@ -168,7 +168,7 @@ while($true){ $p.ReadExisting() }
 
 | Símptoma | Causa | Solució |
 |----------|-------|---------|
-| `*** PANIC *** Out of memory` / es penja en emparellar | Opus a RAM + lwIP → heap esgotat | Compila amb `ENABLE_WOL=ON` (deixa Opus a flash) i **build net** |
+| `*** PANIC *** Out of memory` / es penja en emparellar | **Tot** Opus a RAM + lwIP → heap esgotat | Amb `ENABLE_WOL=ON` només es relloca el camí CELT-encode (~87 KB, ~276 KB heap lliure). Si reapareix, **build net** i revisa que no s'hagin afegit més TUs/`.rodata` a la relocació (CONTEXT.md §3.4, IMPROVEMENTS.md P3) |
 | CMake: "unable to find a build program / Ninja" | Eines fora del PATH | Posa cmake/ninja/toolchain al PATH (§0) |
 | `cd : no existe ...\.pico-sdk\...` | `$USERPROFILE` en comptes de `$env:USERPROFILE` | Usa `$env:USERPROFILE` a PowerShell |
 | Errors USB/àudio | TinyUSB ≠ 0.20.0 | §1 |

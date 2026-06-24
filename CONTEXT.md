@@ -68,12 +68,50 @@ i el comandament funciona com sempre.
   relloca `libopus` a RAM** (es queda a flash/XIP). Allibera ~280 KB → de ~83 KB
   lliures es passa a **~362 KB lliures**. El build stock (sense WoL) manté Opus a
   RAM com l'original.
-- ⚠️ **Compromís:** amb WoL, el còdec d'àudio corre des de flash → possible petita
-  pèrdua de qualitat a **l'altaveu/jack del propi comandament**. L'entrada del
-  comandament, la vibració, els gallets i tota la resta **NO** s'afecten. Candidat
-  de millora a [IMPROVEMENTS.md](IMPROVEMENTS.md) (rellocació selectiva).
-- **Nota de build:** l'`objcopy` que renombrava les seccions modificava `libopus.a`
+- ✅ **Compromís RESOLT (release de rendiment, §3.4):** ja no cal triar entre WoL i
+  àudio. Es relloca a RAM **només el camí CELT d'encode** d'Opus (~87 KB), no els
+  241 KB sencers → àudio perfecte **i** ~276 KB de heap lliure.
+- **Nota de build:** l'`objcopy`/`ar` que renombra les seccions modifica `libopus.a`
   *in place*; cal **build net** (esborrar `build*/`) perquè el canvi tingui efecte.
+
+### 3.4 Release de rendiment — àudio perfecte amb headroom de RAM *(2026-06-24)*
+
+- **Idea clau:** **ambdues direccions corren en CELT-only** — l'encoder de l'altaveu
+  usa `OPUS_APPLICATION_RESTRICTED_LOWDELAY`, i el mic del DualSense puja CELT-only
+  48 kHz fullband 10 ms (el SILK no pot representar 48 kHz fullband). El codi SILK
+  **mai** s'executa al camí d'àudio. Per tant es relloca a RAM **només** el subconjunt
+  CELT encode+decode (21 TUs, ~104 KB de `.text`) en comptes de tot `libopus`
+  (~241 KB). Això elimina els *XIP-miss* per frame a core1 tant a l'**encode**
+  (altaveu/haptics) com al **decode** (mic) → àudio perfecte als dos sentits, deixant
+  ~260 KB de heap lliure — **>100 KB** per sobre del nivell que provocava l'OOM (§3.1).
+- **Mecanisme:** [cmake/relocate_archive_members.cmake](cmake/relocate_archive_members.cmake)
+  fa cirurgia per-membre a `libopus.a` (`ar x` → `objcopy --rename-section
+  .text=.time_critical.opus_text` → `ar r` → `ar s`). A [CMakeLists.txt](CMakeLists.txt),
+  la branca `ENABLE_WOL` ON fa la relocació **selectiva** (`OPUS_RAM_MEMBERS`); OFF
+  manté la relocació de tot l'arxiu (comportament original). Verificat al mapa:
+  `celt_encode_with_ec`, `celt_decode_with_ec`, `opus_decode`, `ec_dec_*`, etc. a
+  `0x2001xxxx` (RAM); `silk_*` a `0x10xxxxxx` (flash).
+- **Altres guanys d'aquesta release (risc zero, build-verificats):**
+  - Pont de transport HCI btstack↔cyw43 (`hci_transport_data_source_process`,
+    `..._send_packet`, `cyw43_bluetooth_hci_process`) rellocat a RAM → menys latència
+    XIP al camí BT per-paquet que alimenta els informes d'àudio/haptics.
+  - `ENABLE_LOG_INFO` de btstack tret (logging intern verbós; menys flash/CPU al
+    camí d'esdeveniments BT). `ENABLE_PRINTF_HEXDUMP` es manté: el Pico SDK compila
+    `hci_dump_embedded_stdout.c` que el requereix per `#error`, però es *gc-elimina*
+    del binari final (hci_dump mai s'inicialitza).
+  - `<iostream>`/`<iomanip>` + `print_hex()` mort trets de `utils.h`.
+  - Barrera CMake: `FATAL_ERROR` si algú activa IPO/`-flto` (trencaria silenciosament
+    tota la relocació `.time_critical`, que opera al PRE_LINK).
+- **Micro-opts descartats després de verificar-los:** `/32768.0f`→recíproc ja el fa
+  el compilador (`vdiv=0`); altres hoists eren a camins no-crítics o pessimitzaven el
+  curtcircuit → es deixa el codi BT/àudio intacte.
+- **Decode del mic (2026-06-24, 2a iteració):** afegit el conjunt CELT-decode
+  (`celt_decoder` + `opus_decoder` + `entdec`, +17 KB) a `OPUS_RAM_MEMBERS` → mic
+  perfecte també. `.data` 150 → 167 KB; heap ~276 → **~260 KB** (segur, >250 KB).
+  Còdec del mic confirmat CELT per anàlisi (workflow) i validat per oïda.
+- **Pendent (necessita mesura de maquinari, vegeu [IMPROVEMENTS.md](IMPROVEMENTS.md)):**
+  reclamar el stack de core1 (32 KB), trim de lwIP (~9 KB), i opcionalment les taules
+  `.rodata` d'Opus (+20 KB).
 
 ### 3.2 El WoL només es disparava el primer cop (gating del bus suspès)
 
@@ -113,7 +151,7 @@ i el comandament funciona com sempre.
 
 | Opció | Defecte | Efecte |
 |-------|---------|--------|
-| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus a flash** (allibera RAM) |
+| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus CELT-encode a RAM** (selectiu, §3.4) |
 | `ENABLE_SERIAL` | OFF | `printf` per USB CDC (canvia l'enumeració USB; sense watchdog) |
 | `ENABLE_VERBOSE` | OFF | Logs BTstack detallats |
 | `ENABLE_BATT_LED` | ON | LED de bateria baixa |
@@ -136,8 +174,11 @@ i el comandament funciona com sempre.
 - ✅ El comandament es manté connectat durant l'arrencada → **un sol PS** (resolt
   l'apagat automàtic durant el boot).
 - ✅ Amb el PC encès, tot funciona normal i el WoL s'avorta correctament.
-- ⚠️ Pendent de valorar a l'ús: qualitat de l'àudio de l'altaveu/jack del comandament
-  amb Opus des de flash (vegeu [IMPROVEMENTS.md](IMPROVEMENTS.md)).
+- 🔬 **Release de rendiment (§3.4, 2026-06-24): pendent de validació a maquinari.**
+  Build verificat al mapa (CELT-encode a RAM, SILK a flash, ~276 KB heap lliure) i
+  flashejat. Cal passar la matriu de proves de maquinari (vegeu IMPROVEMENTS.md):
+  àudio altaveu/mic/haptics, pair/reconnect, BOOTSEL, wake-on-PS, WoL en fred, DSE,
+  config-save, i ≥10 cicles pair+WoL sense PANIC.
 
 ### Maquinari / muntatge validat
 - Pico 2W amb el firmware de producció (`build/ds5-bridge.uf2`, `ENABLE_WOL=ON`).
@@ -157,6 +198,16 @@ i el comandament funciona com sempre.
   s'apagui durant l'arrencada del PC.
 - Afegides eines de diagnòstic `WOL_FORCE_TEST` i `WOL_UDP_LOG`.
 - Validat a maquinari real: experiència d'un sol PS aconseguida.
+
+### 2026-06-24 — Release de rendiment (àudio perfecte + headroom de RAM)
+- Anàlisi exhaustiva multi-agent (7 dimensions, verificació adversarial) → pla per fases.
+- **Relocació selectiva CELT-encode** d'Opus a RAM (§3.4): resol el compromís d'àudio
+  del fix 3.1. `.data` 64 KB → 150 KB; heap lliure ~362 KB → **~276 KB**; àudio perfecte.
+- Pont HCI btstack↔cyw43 a RAM; `ENABLE_LOG_INFO` tret; `<iostream>`/`print_hex` tret;
+  barrera anti-LTO a CMake.
+- Build net verificat (mapa: CELT a RAM, SILK a flash) i flashejat. Validació de
+  maquinari pendent. Properes millores (mesura de stack, lwIP, decode/rodata) a
+  IMPROVEMENTS.md.
 
 > Antecedents (anàlisi original i revisió multi-agent) a la carpeta de la 0.6.0.
 
