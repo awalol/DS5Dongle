@@ -1,221 +1,219 @@
-# Context del projecte — Pico 2W DualSense Bridge (DS5Dongle) — **v0.7.2-hotfix + Wake-on-LAN**
+# Project Context — Pico 2W DualSense Bridge (DS5Dongle) — **v0.7.2-hotfix + Wake-on-LAN**
 
-> Estat: **funcional i validat en maquinari real** (PC objectiu amb RTX 5090).
-> Per compilar i flashejar, vegeu [BUILD.md](BUILD.md). Per a la propera tanda de
-> millores, vegeu [IMPROVEMENTS.md](IMPROVEMENTS.md).
+> Status: **functional and validated on real hardware** (target PC with an RTX 5090).
+> For build and flash instructions, see [BUILD.md](BUILD.md). For the next round of
+> improvements, see [IMPROVEMENTS.md](IMPROVEMENTS.md).
 
 ---
 
-## 1. Què és el projecte
+## 1. What this project is
 
-Firmware d'una **Raspberry Pi Pico 2W** (RP2350 + xip wireless CYW43) que la
-converteix en un **dongle USB sense fils** per a comandaments **Sony DualSense
-(DS5)** i **DualSense Edge (DSE)**. Fa de pont bidireccional:
+Firmware for a **Raspberry Pi Pico 2W** (RP2350 + CYW43 wireless chip) that turns it
+into a **wireless USB dongle** for Sony **DualSense (DS5)** and **DualSense Edge (DSE)**
+controllers. It acts as a bidirectional bridge:
 
 ```
    DualSense  ──(Bluetooth Classic, L2CAP/HID)──►  Pico 2W  ──(USB HID + Audio)──►  PC
 ```
 
-- **Cap al comandament:** host Bluetooth Classic (BTstack) — inquiry, emparella,
-  obre canals L2CAP HID (Control + Interrupt).
-- **Cap al PC:** emula un DualSense real (VID/PID de Sony) amb interfície HID +
-  USB Audio (UAC1), incloent vibració hàptica i àudio de l'altaveu/jack.
-- **Doble nucli:** core0 = bucle principal (BT, USB, haptics, WoL); core1 =
-  còdec d'àudio Opus.
+- **Toward the controller:** a Bluetooth Classic host (BTstack) — inquiry, pairing,
+  opening the L2CAP HID channels (Control + Interrupt).
+- **Toward the PC:** it emulates a real DualSense (Sony VID/PID) with an HID interface
+  plus USB Audio (UAC1), including haptic rumble and speaker/jack audio.
+- **Dual-core:** core0 = main loop (BT, USB, haptics, WoL); core1 = Opus audio codec.
 
 ---
 
-## 2. La funció afegida: Wake-on-LAN (`ENABLE_WOL`, ON per defecte)
+## 2. The added feature: Wake-on-LAN (`ENABLE_WOL`, ON by default)
 
-**Objectiu assolit (experiència "de consola"):** amb el PC **apagat (S5)** però el
-Pico alimentat (USB standby o hub/extensor alimentat), en prémer **PS un sol cop**
-el comandament connecta amb la Pico, aquesta envia un **magic packet de WoL** per
-WiFi, el PC s'encén i el comandament **es manté connectat durant tota l'arrencada**
-(sense haver de prémer PS un segon cop). Un cop el PC està encès, el WiFi es tomba
-i el comandament funciona com sempre.
+**Goal achieved (a console-like experience):** with the PC **powered off (S5)** but the
+Pico still powered (USB standby or a powered hub/extender), a **single PS press** on the
+controller connects it to the Pico, which then sends a **WoL magic packet** over WiFi.
+The PC powers on and the controller **stays connected throughout the entire boot** (no
+need for a second PS press). Once the PC is up, WiFi is brought down and the controller
+works as usual.
 
-### Fitxers afegits (`src/`)
-- [wol.cpp](src/wol.cpp) / [wol.h](src/wol.h) — màquina d'estats no bloquejant
+### Files added (`src/`)
+- [wol.cpp](src/wol.cpp) / [wol.h](src/wol.h) — non-blocking state machine
   (`Idle → Observe → Connecting → Backoff → Sending → Cleanup`).
-- [lwipopts.h](src/lwipopts.h) — config lwIP (poll, UDP + DHCP + broadcast).
-- `secrets.h` — credencials locals (SSID, contrasenya, **MAC del PC**, port).
-  **Gitignored**; plantilla a [secrets.h.example](src/secrets.h.example).
+- [lwipopts.h](src/lwipopts.h) — lwIP configuration (poll, UDP + DHCP + broadcast).
+- `secrets.h` — local credentials (SSID, password, **PC MAC**, port).
+  **Gitignored**; template at [secrets.h.example](src/secrets.h.example).
 
-### Ganxos a fitxers existents
-- [CMakeLists.txt](CMakeLists.txt) — opció `ENABLE_WOL`; quan ON: `CYW43_LWIP=1`,
-  enllaça `pico_cyw43_arch_lwip_poll`, compila `wol.cpp`, **i NO relloca Opus a
-  RAM** (vegeu §3.1).
-- [main.cpp](src/main.cpp) — `wol_init()` després de `state_init()`; `wol_tick()`
-  al final del bucle.
-- [bt.cpp](src/bt.cpp) — `wol_request()` en obrir-se el canal L2CAP HID Interrupt.
-- [wake.cpp](src/wake.cpp) / [wake.h](src/wake.h) — nova funció
-  `wake_suppress_poweroff()` (vegeu §3.3).
-
----
-
-## 3. Els TRES problemes resolts aquesta sessió (causa exacta + fix)
-
-### 3.1 `*** PANIC *** Out of memory` → es penjava en emparellar
-
-- **Símptoma:** amb el build WoL (i fins i tot el build stock+serial), el Pico
-  trobava el comandament però **es penjava durant l'SSP**; no acabava de connectar.
-  El binari oficial precompilat **sí** funcionava.
-- **Causa:** el firmware relloca **~280 KB de codi d'Opus a RAM** (`.time_critical`,
-  per rendiment d'àudio). Això deixa el *heap* molt just. En afegir lwIP (+~18 KB)
-  per al WoL, un `malloc` durant la inicialització BT fallava → `panic("Out of
-  memory")`. (BTstack usa pools estàtics; l'OOM venia del heap compartit Opus/lwIP.)
-- **Fix:** a [CMakeLists.txt](CMakeLists.txt), **quan `ENABLE_WOL` està actiu NO es
-  relloca `libopus` a RAM** (es queda a flash/XIP). Allibera ~280 KB → de ~83 KB
-  lliures es passa a **~362 KB lliures**. El build stock (sense WoL) manté Opus a
-  RAM com l'original.
-- ✅ **Compromís RESOLT (release de rendiment, §3.4):** ja no cal triar entre WoL i
-  àudio. Es relloca a RAM **només el camí CELT d'encode** d'Opus (~87 KB), no els
-  241 KB sencers → àudio perfecte **i** ~276 KB de heap lliure.
-- **Nota de build:** l'`objcopy`/`ar` que renombra les seccions modifica `libopus.a`
-  *in place*; cal **build net** (esborrar `build*/`) perquè el canvi tingui efecte.
-
-### 3.4 Release de rendiment — àudio perfecte amb headroom de RAM *(2026-06-24)*
-
-- **Idea clau:** **ambdues direccions corren en CELT-only** — l'encoder de l'altaveu
-  usa `OPUS_APPLICATION_RESTRICTED_LOWDELAY`, i el mic del DualSense puja CELT-only
-  48 kHz fullband 10 ms (el SILK no pot representar 48 kHz fullband). El codi SILK
-  **mai** s'executa al camí d'àudio. Per tant es relloca a RAM **només** el subconjunt
-  CELT encode+decode (21 TUs, ~104 KB de `.text`) en comptes de tot `libopus`
-  (~241 KB). Això elimina els *XIP-miss* per frame a core1 tant a l'**encode**
-  (altaveu/haptics) com al **decode** (mic) → àudio perfecte als dos sentits, deixant
-  ~260 KB de heap lliure — **>100 KB** per sobre del nivell que provocava l'OOM (§3.1).
-- **Mecanisme:** [cmake/relocate_archive_members.cmake](cmake/relocate_archive_members.cmake)
-  fa cirurgia per-membre a `libopus.a` (`ar x` → `objcopy --rename-section
-  .text=.time_critical.opus_text` → `ar r` → `ar s`). A [CMakeLists.txt](CMakeLists.txt),
-  la branca `ENABLE_WOL` ON fa la relocació **selectiva** (`OPUS_RAM_MEMBERS`); OFF
-  manté la relocació de tot l'arxiu (comportament original). Verificat al mapa:
-  `celt_encode_with_ec`, `celt_decode_with_ec`, `opus_decode`, `ec_dec_*`, etc. a
-  `0x2001xxxx` (RAM); `silk_*` a `0x10xxxxxx` (flash).
-- **Altres guanys d'aquesta release (risc zero, build-verificats):**
-  - Pont de transport HCI btstack↔cyw43 (`hci_transport_data_source_process`,
-    `..._send_packet`, `cyw43_bluetooth_hci_process`) rellocat a RAM → menys latència
-    XIP al camí BT per-paquet que alimenta els informes d'àudio/haptics.
-  - `ENABLE_LOG_INFO` de btstack tret (logging intern verbós; menys flash/CPU al
-    camí d'esdeveniments BT). `ENABLE_PRINTF_HEXDUMP` es manté: el Pico SDK compila
-    `hci_dump_embedded_stdout.c` que el requereix per `#error`, però es *gc-elimina*
-    del binari final (hci_dump mai s'inicialitza).
-  - `<iostream>`/`<iomanip>` + `print_hex()` mort trets de `utils.h`.
-  - Barrera CMake: `FATAL_ERROR` si algú activa IPO/`-flto` (trencaria silenciosament
-    tota la relocació `.time_critical`, que opera al PRE_LINK).
-- **Micro-opts descartats després de verificar-los:** `/32768.0f`→recíproc ja el fa
-  el compilador (`vdiv=0`); altres hoists eren a camins no-crítics o pessimitzaven el
-  curtcircuit → es deixa el codi BT/àudio intacte.
-- **Decode del mic (2026-06-24, 2a iteració):** afegit el conjunt CELT-decode
-  (`celt_decoder` + `opus_decoder` + `entdec`, +17 KB) a `OPUS_RAM_MEMBERS` → mic
-  perfecte també. `.data` 150 → 167 KB; heap ~276 → **~260 KB** (segur, >250 KB).
-  Còdec del mic confirmat CELT per anàlisi (workflow) i validat per oïda.
-- **Pendent (necessita mesura de maquinari, vegeu [IMPROVEMENTS.md](IMPROVEMENTS.md)):**
-  reclamar el stack de core1 (32 KB), trim de lwIP (~9 KB), i opcionalment les taules
-  `.rodata` d'Opus (+20 KB).
-
-### 3.2 El WoL només es disparava el primer cop (gating del bus suspès)
-
-- **Símptoma:** la 1a vegada (PC mai encès) el WoL s'enviava. La 2a (PC havia estat
-  encès i després apagat) **no s'enviava**.
-- **Causa:** el *gating* mirava només `tud_mounted()`. Quan el PC s'apaga però el
-  port USB segueix donant corrent, el bus queda **suspès** (no desconnectat) i
-  `tud_mounted()` segueix `true` → el WoL creia el PC encès i avortava.
-- **Fix:** a [wol.cpp](src/wol.cpp), estat `Observe`, la condició d'avortar és ara
-  **`tud_mounted() && !tud_suspended()`** (host *muntat I actiu*). Si està suspès
-  (PC S5 amb standby) o desmuntat → es dispara el WoL. També es va pujar
-  l'anti-rebot a **90 s** perquè les reconnexions durant el boot no re-disparin WoL.
-
-### 3.3 Es perdia la connexió durant l'arrencada → calia un 2n PS *(fix definitiu)*
-
-- **Símptoma:** el WoL despertava el PC, però **durant l'arrencada** el comandament
-  s'apagava i calia prémer PS un segon cop. Passava també amb alimentació estable
-  (extensor) → no era ni alimentació ni enumeració.
-- **Diagnòstic clau:** logs capturats per WiFi (UDP) + observació de l'usuari (el LED
-  del teclat USB i el del Pico parpellejaven al traspàs BIOS→Windows).
-- **Causa exacta:** [wake.cpp](src/wake.cpp) té un estalvi de bateria que **apaga el
-  comandament** (`bt_power_off_controller()`) si l'USB queda **suspès més de 3 s**
-  (`WAKE_POWEROFF_DEBOUNCE_US`), interpretant-ho com "PC adormit/apagat". En una
-  arrencada després del WoL l'USB està suspès molts segons mentre el PC arrenca →
-  el firmware apagava el comandament a mig boot.
-- **Fix (universal, no trenca la suspensió S3):** nova funció
-  **`wake_suppress_poweroff(duration_us)`** a [wake.cpp](src/wake.cpp). El WoL la
-  crida (a `wol_request()`, [wol.cpp](src/wol.cpp)) en connectar-se el comandament,
-  suprimint l'apagat automàtic durant **180 s** (cobreix l'arrencada). Si el PC
-  realment no arrenca, l'apagat es reactiva passat el termini (estalvi de bateria
-  intacte). El comportament de suspensió S3 (apagar als 3 s + despertar amb PS) NO
-  canvia.
+### Hooks into existing files
+- [CMakeLists.txt](CMakeLists.txt) — `ENABLE_WOL` option; when ON: `CYW43_LWIP=1`,
+  links `pico_cyw43_arch_lwip_poll`, compiles `wol.cpp`, **and does NOT relocate Opus to
+  RAM** (see §3.1).
+- [main.cpp](src/main.cpp) — `wol_init()` after `state_init()`; `wol_tick()` at the end
+  of the loop.
+- [bt.cpp](src/bt.cpp) — `wol_request()` when the L2CAP HID Interrupt channel opens.
+- [wake.cpp](src/wake.cpp) / [wake.h](src/wake.h) — new `wake_suppress_poweroff()`
+  function (see §3.3).
 
 ---
 
-## 4. Opcions de compilació (CMake)
+## 3. The THREE problems solved (exact cause + fix)
 
-| Opció | Defecte | Efecte |
-|-------|---------|--------|
-| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus CELT-encode a RAM** (selectiu, §3.4) |
-| `ENABLE_SERIAL` | OFF | `printf` per USB CDC (canvia l'enumeració USB; sense watchdog) |
-| `ENABLE_VERBOSE` | OFF | Logs BTstack detallats |
-| `ENABLE_BATT_LED` | ON | LED de bateria baixa |
-| `WOL_FORCE_TEST` | OFF | **DEBUG:** força el WoL en cada connexió (ignora el gating del PC) |
-| `WOL_UDP_LOG` | OFF | **DEBUG:** redirigeix `printf` a UDP broadcast:9999 i manté el WiFi amunt |
+### 3.1 `*** PANIC *** Out of memory` → hang during pairing
+
+- **Symptom:** with the WoL build (and even the stock+serial build), the Pico would find
+  the controller but **hang during SSP**; it never completed the connection. The official
+  precompiled binary **did** work.
+- **Cause:** the firmware relocates **~280 KB of Opus code to RAM** (`.time_critical`,
+  for audio performance). This leaves the heap very tight. Adding lwIP (+~18 KB) for WoL
+  caused a `malloc` during BT initialization to fail → `panic("Out of memory")`. (BTstack
+  uses static pools; the OOM came from the heap shared between Opus and lwIP.)
+- **Fix:** in [CMakeLists.txt](CMakeLists.txt), **when `ENABLE_WOL` is active, `libopus`
+  is NOT relocated to RAM** (it stays in flash/XIP). This frees ~280 KB → from ~83 KB
+  free to **~362 KB free**. The stock build (no WoL) keeps Opus in RAM as in the original.
+- ✅ **Trade-off RESOLVED (performance release, §3.4):** there is no longer a choice
+  between WoL and audio. Only the **CELT encode path** of Opus (~87 KB) is relocated to
+  RAM, not the full 241 KB → perfect audio **and** ~276 KB of free heap.
+- **Build note:** the `objcopy`/`ar` step that renames the sections modifies `libopus.a`
+  *in place*, so a **clean build** (delete `build*/`) is required for the change to take
+  effect.
+
+### 3.4 Performance release — perfect audio with RAM headroom *(2026-06-24)*
+
+- **Key insight:** **both directions run CELT-only** — the speaker encoder uses
+  `OPUS_APPLICATION_RESTRICTED_LOWDELAY`, and the DualSense mic streams CELT-only 48 kHz
+  fullband 10 ms (SILK cannot represent 48 kHz fullband). The SILK code **never** runs on
+  the audio path. So only the CELT encode+decode subset (21 TUs, ~104 KB of `.text`) is
+  relocated to RAM instead of all of `libopus` (~241 KB). This eliminates the per-frame
+  XIP misses on core1 for both **encode** (speaker/haptics) and **decode** (mic) → perfect
+  audio in both directions, leaving ~260 KB of free heap — **>100 KB** above the level that
+  triggered the OOM (§3.1).
+- **Mechanism:** [cmake/relocate_archive_members.cmake](cmake/relocate_archive_members.cmake)
+  performs per-member surgery on `libopus.a` (`ar x` → `objcopy --rename-section
+  .text=.time_critical.opus_text` → `ar r` → `ar s`). In [CMakeLists.txt](CMakeLists.txt),
+  the `ENABLE_WOL` ON branch performs the **selective** relocation (`OPUS_RAM_MEMBERS`);
+  OFF keeps relocating the whole archive (original behavior). Verified in the map:
+  `celt_encode_with_ec`, `celt_decode_with_ec`, `opus_decode`, `ec_dec_*`, etc. at
+  `0x2001xxxx` (RAM); `silk_*` at `0x10xxxxxx` (flash).
+- **Other wins in this release (zero risk, build-verified):**
+  - HCI transport bridge btstack↔cyw43 (`hci_transport_data_source_process`,
+    `..._send_packet`, `cyw43_bluetooth_hci_process`) relocated to RAM → less XIP latency
+    on the per-packet BT path that feeds the audio/haptics reports.
+  - btstack's `ENABLE_LOG_INFO` removed (verbose internal logging; less flash/CPU on the
+    BT event path). `ENABLE_PRINTF_HEXDUMP` is kept: the Pico SDK compiles
+    `hci_dump_embedded_stdout.c`, which requires it for an `#error`, but it is
+    *gc-eliminated* from the final binary (hci_dump is never initialized).
+  - `<iostream>`/`<iomanip>` + the dead `print_hex()` removed from `utils.h`.
+  - CMake guard: `FATAL_ERROR` if anyone enables IPO/`-flto` (it would silently break the
+    entire `.time_critical` relocation, which runs at PRE_LINK).
+- **Micro-opts discarded after verification:** `/32768.0f`→reciprocal is already done by
+  the compiler (`vdiv=0`); other hoists were on non-critical paths or pessimized the
+  short-circuit → the BT/audio code is left untouched.
+- **Mic decode (2026-06-24, 2nd iteration):** added the CELT-decode set
+  (`celt_decoder` + `opus_decoder` + `entdec`, +17 KB) to `OPUS_RAM_MEMBERS` → perfect mic
+  as well. `.data` 150 → 167 KB; heap ~276 → **~260 KB** (safe, >250 KB). The mic codec is
+  confirmed CELT by analysis and validated by ear.
+- **Pending (needs hardware measurement, see [IMPROVEMENTS.md](IMPROVEMENTS.md)):**
+  reclaiming the core1 stack (32 KB), trimming lwIP (~9 KB), and optionally Opus's
+  `.rodata` tables (+20 KB).
+
+### 3.2 WoL only fired the first time (suspended-bus gating)
+
+- **Symptom:** the 1st time (PC never powered on) WoL was sent. The 2nd time (PC had been
+  on and was then powered off) it **was not sent**.
+- **Cause:** the gating looked only at `tud_mounted()`. When the PC powers off but the USB
+  port keeps supplying current, the bus is **suspended** (not disconnected) and
+  `tud_mounted()` stays `true` → WoL assumed the PC was on and aborted.
+- **Fix:** in [wol.cpp](src/wol.cpp), `Observe` state, the abort condition is now
+  **`tud_mounted() && !tud_suspended()`** (host *mounted AND active*). If suspended (PC at
+  S5 with standby) or unmounted → WoL fires. The debounce was also raised to **90 s** so
+  that reconnections during boot do not re-trigger WoL.
+
+### 3.3 Connection dropped during boot → a 2nd PS was needed
+
+- **Symptom:** WoL woke the PC, but **during boot** the controller powered off and a second
+  PS press was required. It also happened with stable power (extender) → it was neither
+  power nor enumeration.
+- **Key diagnostic:** logs captured over WiFi (UDP) + user observation (the USB keyboard
+  LED and the Pico LED blinked at the BIOS→Windows handoff).
+- **Exact cause:** [wake.cpp](src/wake.cpp) has a battery-saving feature that **powers off
+  the controller** (`bt_power_off_controller()`) if USB stays **suspended for more than 3 s**
+  (`WAKE_POWEROFF_DEBOUNCE_US`), interpreting it as "PC asleep/off." On a post-WoL boot, USB
+  is suspended for many seconds while the PC starts → the firmware powered off the controller
+  mid-boot.
+- **Fix (universal, does not break S3 suspend):** new
+  **`wake_suppress_poweroff(duration_us)`** function in [wake.cpp](src/wake.cpp). WoL calls
+  it (from `wol_request()`, [wol.cpp](src/wol.cpp)) when the controller connects, suppressing
+  the automatic power-off for **180 s** (covers the boot). If the PC really doesn't boot,
+  the power-off re-enables after the timeout (battery saving intact). The S3 suspend behavior
+  (power off after 3 s + wake on PS) is **unchanged**.
+
+---
+
+## 4. Build options (CMake)
+
+| Option | Default | Effect |
+|--------|---------|--------|
+| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus CELT-encode in RAM** (selective, §3.4) |
+| `ENABLE_SERIAL` | OFF | `printf` over USB CDC (changes USB enumeration; no watchdog) |
+| `ENABLE_VERBOSE` | OFF | Detailed BTstack logs |
+| `ENABLE_BATT_LED` | ON | Low-battery LED |
+| `WOL_FORCE_TEST` | OFF | **DEBUG:** forces WoL on every connection (ignores PC gating) |
+| `WOL_UDP_LOG` | OFF | **DEBUG:** redirects `printf` to UDP broadcast:9999 and keeps WiFi up |
 | `PICO_W_BUILD` | OFF | Pico W (RP2040) |
-| `WAKE_DEBUG` | OFF | Traça de la FSM de wake |
+| `WAKE_DEBUG` | OFF | Trace of the wake FSM |
 
-> Els dos `WOL_*` de DEBUG són eines de diagnòstic afegides aquesta sessió; en
-> producció van **OFF**. `WOL_UDP_LOG` manté el WiFi actiu (estressa la coexistència
-> BT) — només per capturar logs amb el PC objectiu apagat.
-
----
-
-## 5. Estat validat (maquinari real)
-
-- ✅ Emparellament net (resolt l'OOM).
-- ✅ WoL desperta el PC objectiu (RTX 5090) de forma fiable, també repetidament
-  (resolt el gating del bus suspès).
-- ✅ El comandament es manté connectat durant l'arrencada → **un sol PS** (resolt
-  l'apagat automàtic durant el boot).
-- ✅ Amb el PC encès, tot funciona normal i el WoL s'avorta correctament.
-- 🔬 **Release de rendiment (§3.4, 2026-06-24): pendent de validació a maquinari.**
-  Build verificat al mapa (CELT-encode a RAM, SILK a flash, ~276 KB heap lliure) i
-  flashejat. Cal passar la matriu de proves de maquinari (vegeu IMPROVEMENTS.md):
-  àudio altaveu/mic/haptics, pair/reconnect, BOOTSEL, wake-on-PS, WoL en fred, DSE,
-  config-save, i ≥10 cicles pair+WoL sense PANIC.
-
-### Maquinari / muntatge validat
-- Pico 2W amb el firmware de producció (`build/ds5-bridge.uf2`, `ENABLE_WOL=ON`).
-- Alimentació estable recomanada: hub/extensor USB amb alimentació externa, o un
-  port USB del PC amb "always-on USB" (ErP off) per donar corrent standby.
+> The two DEBUG `WOL_*` options are diagnostic tools; in production they are **OFF**.
+> `WOL_UDP_LOG` keeps WiFi active (stresses BT coexistence) — use it only to capture logs
+> with the target PC powered off.
 
 ---
 
-## 6. Registre de canvis (work log)
+## 5. Validated status (real hardware)
 
-### 2026-06-23 — Port del WoL i estabilització a maquinari real
-- Clonat el tag `v0.7.2-hotfix`; portat el WoL des de la feina sobre la 0.6.0.
-- Compilat amb Pico SDK 2.2.0 + TinyUSB **0.20.0** + ARM GCC 14.2.Rel1 (vegeu BUILD.md).
-- **Fix 3.1:** OOM resolt traient Opus de RAM quan `ENABLE_WOL`.
-- **Fix 3.2:** gating del WoL ara `tud_mounted() && !tud_suspended()`; debounce 90 s.
-- **Fix 3.3 (definitiu):** `wake_suppress_poweroff()` evita que el comandament
-  s'apagui durant l'arrencada del PC.
-- Afegides eines de diagnòstic `WOL_FORCE_TEST` i `WOL_UDP_LOG`.
-- Validat a maquinari real: experiència d'un sol PS aconseguida.
+- ✅ Clean pairing (OOM resolved).
+- ✅ WoL reliably wakes the target PC (RTX 5090), including repeatedly (suspended-bus
+  gating resolved).
+- ✅ The controller stays connected during boot → **a single PS** (automatic boot-time
+  power-off resolved).
+- ✅ With the PC on, everything works normally and WoL aborts correctly.
+- 🔬 **Performance release (§3.4, 2026-06-24): hardware validation pending.** Build verified
+  in the map (CELT-encode in RAM, SILK in flash, ~276 KB free heap) and flashed. It still
+  needs to pass the hardware test matrix (see IMPROVEMENTS.md): speaker/mic/haptics audio,
+  pair/reconnect, BOOTSEL, wake-on-PS, cold WoL, DSE, config-save, and ≥10 pair+WoL cycles
+  without a PANIC.
 
-### 2026-06-24 — Release de rendiment (àudio perfecte + headroom de RAM)
-- Anàlisi exhaustiva multi-agent (7 dimensions, verificació adversarial) → pla per fases.
-- **Relocació selectiva CELT-encode** d'Opus a RAM (§3.4): resol el compromís d'àudio
-  del fix 3.1. `.data` 64 KB → 150 KB; heap lliure ~362 KB → **~276 KB**; àudio perfecte.
-- Pont HCI btstack↔cyw43 a RAM; `ENABLE_LOG_INFO` tret; `<iostream>`/`print_hex` tret;
-  barrera anti-LTO a CMake.
-- Build net verificat (mapa: CELT a RAM, SILK a flash) i flashejat. Validació de
-  maquinari pendent. Properes millores (mesura de stack, lwIP, decode/rodata) a
-  IMPROVEMENTS.md.
-
-> Antecedents (anàlisi original i revisió multi-agent) a la carpeta de la 0.6.0.
+### Validated hardware / setup
+- Pico 2W with the production firmware (`build/ds5-bridge.uf2`, `ENABLE_WOL=ON`).
+- Recommended stable power: a USB hub/extender with external power, or a PC USB port with
+  "always-on USB" (ErP off) to supply standby current.
 
 ---
 
-## 7. ⚠️ Seguretat / git
+## 6. Change log (work log)
 
-- `src/secrets.h` (SSID, **contrasenya WiFi**, MAC) està **gitignored** i **NO s'ha
-  de pujar mai**. Plantilla pública: `src/secrets.h.example`.
-- El remote `origin` apunta a l'upstream `awalol/DS5Dongle`. Per pujar els canvis,
-  **crea un repositori propi** i canvia el remote; no facis push a l'upstream.
+### 2026-06-23 — WoL port and stabilization on real hardware
+- Cloned the `v0.7.2-hotfix` tag; ported WoL from the work branch on top of 0.6.0.
+- Built with Pico SDK 2.2.0 + TinyUSB **0.20.0** + ARM GCC 14.2.Rel1 (see BUILD.md).
+- **Fix 3.1:** OOM resolved by keeping Opus out of RAM when `ENABLE_WOL` is set.
+- **Fix 3.2:** WoL gating is now `tud_mounted() && !tud_suspended()`; debounce 90 s.
+- **Fix 3.3:** `wake_suppress_poweroff()` keeps the controller from powering off during PC
+  boot.
+- Added the `WOL_FORCE_TEST` and `WOL_UDP_LOG` diagnostic tools.
+- Validated on real hardware: single-PS experience achieved.
+
+### 2026-06-24 — Performance release (perfect audio + RAM headroom)
+- Thorough multi-dimensional analysis (7 dimensions, adversarial verification) → a phased
+  plan.
+- **Selective CELT-encode relocation** of Opus to RAM (§3.4): resolves the audio trade-off
+  from fix 3.1. `.data` 64 KB → 150 KB; free heap ~362 KB → **~276 KB**; perfect audio.
+- HCI bridge btstack↔cyw43 to RAM; `ENABLE_LOG_INFO` removed; `<iostream>`/`print_hex`
+  removed; anti-LTO guard in CMake.
+- Clean build verified (map: CELT in RAM, SILK in flash) and flashed. Hardware validation
+  pending. Upcoming improvements (stack measurement, lwIP, decode/rodata) in IMPROVEMENTS.md.
+
+> Background (original analysis and review) is in the 0.6.0 folder.
+
+---
+
+## 7. ⚠️ Security / git
+
+- `src/secrets.h` (SSID, **WiFi password**, MAC) is **gitignored** and **must never be
+  pushed**. Public template: `src/secrets.h.example`.
+- The `origin` remote points to the upstream `awalol/DS5Dongle`. To push your changes,
+  **create your own repository** and change the remote; do not push to upstream.

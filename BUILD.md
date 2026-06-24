@@ -1,161 +1,147 @@
-# Compilació i flasheig — DS5Dongle v0.7.2-hotfix (+ Wake-on-LAN)
+# Build and Flash — DS5Dongle v0.7.2-hotfix (+ Wake-on-LAN)
 
-Per al funcionament i els fixos, vegeu [CONTEXT.md](CONTEXT.md). Per a millores
-pendents, [IMPROVEMENTS.md](IMPROVEMENTS.md).
+For how the firmware works and the fixes it carries, see [CONTEXT.md](CONTEXT.md). For pending improvements, see [IMPROVEMENTS.md](IMPROVEMENTS.md).
 
-> **Entorn validat (Windows 11):** extensió **Raspberry Pi Pico** de VS Code, que
-> instal·la tot a `~/.pico-sdk`. SDK **2.2.0**, TinyUSB **0.20.0**, ARM GCC
-> **14.2.Rel1**, CMake 3.31.5, Ninja 1.12.1.
+> **Tested environment (Windows 11):** the VS Code **Raspberry Pi Pico** extension, which installs everything under `~/.pico-sdk`. SDK **2.2.0**, TinyUSB **0.20.0**, ARM GCC **14.2.Rel1**, CMake 3.31.5, Ninja 1.12.1.
 
 ---
 
 ## 0. TL;DR (PowerShell, Windows)
 
 ```powershell
-# 1) Eines al PATH d'aquesta sessio (l'extensio de VS Code les instal.la aqui)
+# 1) Put the tools on PATH for this session (the VS Code extension installs them here)
 $env:PATH = "$env:USERPROFILE\.pico-sdk\cmake\v3.31.5\bin;" +
             "$env:USERPROFILE\.pico-sdk\ninja\v1.12.1;" +
             "$env:USERPROFILE\.pico-sdk\toolchain\14_2_Rel1\bin;" + $env:PATH
 
-# 2) Credencials (nomes el primer cop)
-Copy-Item src\secrets.h.example src\secrets.h     # i edita src\secrets.h
+# 2) Credentials (first time only)
+Copy-Item src\secrets.h.example src\secrets.h     # then edit src\secrets.h
 
-# 3) Configurar + compilar (produccio, WoL ON)
+# 3) Configure + build (production, WoL ON)
 cd "C:\path\to\DS5Dongle-0.7.2-hotfix"
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_WOL=ON -DPICO_BOARD=pico2_w
 ninja -C build ds5-bridge
-# -> binari: build\ds5-bridge.uf2
+# -> binary: build\ds5-bridge.uf2
 ```
 
-> Les versions de carpeta (`v3.31.5`, `v1.12.1`, `14_2_Rel1`) poden variar; comprova
-> els noms reals dins `~/.pico-sdk\{cmake,ninja,toolchain}` i ajusta el PATH.
+> The folder versions (`v3.31.5`, `v1.12.1`, `14_2_Rel1`) may differ. Check the actual names under `~/.pico-sdk\{cmake,ninja,toolchain}` and adjust the PATH accordingly.
 
 ---
 
-## 1. Prerequisits
+## 1. Prerequisites
 
-| Eina | Versió |
+| Tool | Version |
 |------|--------|
 | Raspberry Pi **Pico SDK** | **2.2.0** |
-| **TinyUSB** (dins el SDK) | **0.20.0** (obligatori) |
+| **TinyUSB** (bundled with the SDK) | **0.20.0** (required) |
 | **ARM GNU Toolchain** | `arm-none-eabi` 14.2.Rel1 |
 | **CMake** ≥ 3.13, **Ninja**, **Python 3** | — |
-| Submòduls | `lib/WDL`, `lib/opus` |
+| Submodules | `lib/WDL`, `lib/opus` |
 
-### Fixar TinyUSB a 0.20.0 (si el SDK en porta una altra)
-El SDK 2.2.0 sol portar TinyUSB 0.18.0; **cal 0.20.0** o falla USB/àudio:
+### Pin TinyUSB to 0.20.0 (if the SDK ships a different version)
+SDK 2.2.0 usually ships TinyUSB 0.18.0; **0.20.0 is required** or USB/audio breaks:
 ```powershell
 Set-Location "$env:USERPROFILE\.pico-sdk\sdk\2.2.0\lib\tinyusb"
 git fetch --depth 1 origin refs/tags/0.20.0:refs/tags/0.20.0
 git checkout --detach tags/0.20.0
 ```
 
-### Submòduls del projecte
+### Project submodules
 ```powershell
-git submodule update --init --recursive    # poblar lib/WDL i lib/opus
+git submodule update --init --recursive    # populate lib/WDL and lib/opus
 ```
 
 ---
 
-## 2. (WoL) Omplir `src/secrets.h`
+## 2. (WoL) Fill in `src/secrets.h`
 
 ```powershell
 Copy-Item src\secrets.h.example src\secrets.h
 ```
-Edita `src\secrets.h` amb el teu SSID, contrasenya i la **MAC** del PC a despertar
-(`ipconfig /all` → "Adreça física" de l'adaptador amb WoL armat, normalment
-l'Ethernet). El WoL s'adreça a la MAC, no a la IP. Fitxer **gitignored**.
+Edit `src\secrets.h` with your SSID, password and the **MAC** of the PC you want to wake (`ipconfig /all` → "Physical Address" of the adapter that has WoL armed, usually the Ethernet one). WoL targets the MAC, not the IP. This file is **gitignored**.
 
 ---
 
-## 3. Compilar
+## 3. Build
 
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_WOL=ON -DPICO_BOARD=pico2_w
 ninja -C build ds5-bridge
 ```
-Resultat: **`build\ds5-bridge.uf2`**.
+Output: **`build\ds5-bridge.uf2`**.
 
-### Opcions (`-D...`)
+### Options (`-D...`)
 
-| Opció | Defecte | Efecte |
+| Option | Default | Effect |
 |-------|---------|--------|
-| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus CELT-encode rellocat a RAM** (selectiu, ~87 KB → àudio perfecte, ~276 KB heap lliure). Vegeu CONTEXT.md §3.4 |
-| `ENABLE_SERIAL` | OFF | Consola USB CDC per a `printf` (canvia l'USB; desactiva el watchdog) |
-| `ENABLE_VERBOSE` | OFF | Logs BTstack detallats |
-| `ENABLE_BATT_LED` | ON | LED de bateria baixa |
-| `WOL_FORCE_TEST` | OFF | **DEBUG:** força el WoL sempre (ignora el gating del PC encès) |
-| `WOL_UDP_LOG` | OFF | **DEBUG:** `printf` → UDP broadcast:9999 + manté WiFi amunt |
-| `PICO_BOARD` | — | `pico2_w` per a la Pico 2W |
-| `WAKE_DEBUG` | OFF | Traça de la FSM de wake |
+| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus CELT-encode relocated to RAM** (selective, ~87 KB → clean audio, ~276 KB heap free). See CONTEXT.md §3.4 |
+| `ENABLE_SERIAL` | OFF | USB CDC console for `printf` (changes the USB descriptor; disables the watchdog) |
+| `ENABLE_VERBOSE` | OFF | Detailed BTstack logs |
+| `ENABLE_BATT_LED` | ON | Low-battery LED |
+| `WOL_FORCE_TEST` | OFF | **DEBUG:** always force WoL (ignores the PC-on gating) |
+| `WOL_UDP_LOG` | OFF | **DEBUG:** `printf` → UDP broadcast:9999 and keeps WiFi up |
+| `PICO_BOARD` | — | `pico2_w` for the Pico 2W |
+| `WAKE_DEBUG` | OFF | Wake FSM trace |
 
-> ⚠️ **Build net en canviar `ENABLE_WOL`:** la rellocació d'Opus modifica
-> `libopus.a` *in place*. Si passes de WoL OFF↔ON, esborra primer la carpeta:
-> `Remove-Item -Recurse -Force build` i torna a configurar.
+> ⚠️ **Do a clean build when changing `ENABLE_WOL`:** the Opus relocation patches `libopus.a` *in place*. When switching WoL OFF↔ON, delete the build directory first: `Remove-Item -Recurse -Force build`, then reconfigure.
 
 ---
 
-## 4. Flashejar
+## 4. Flash
 
-La Pico 2W en **mode BOOTSEL** es munta com a unitat (etiqueta `RP2350`).
+In **BOOTSEL mode** the Pico 2W mounts as a drive (labelled `RP2350`).
 
-1. Desendolla la Pico → mantén premut **BOOTSEL** → endolla-la → apareix la unitat
-   (p. ex. `E:`).
-2. Copia-hi **`build\ds5-bridge.uf2`**:
+1. Unplug the Pico → hold **BOOTSEL** → plug it back in → the drive appears (e.g. `E:`).
+2. Copy **`build\ds5-bridge.uf2`** onto it:
    ```powershell
    Copy-Item build\ds5-bridge.uf2 E:\
    ```
-3. Es reinicia sola amb el nou firmware.
+3. It reboots itself into the new firmware.
 
-> El dispositiu USB de comandament **només apareix quan el comandament està
-> connectat** (per disseny). Amb `ENABLE_SERIAL=ON` apareix també un port COM.
-
----
-
-## 5. Ús normal (experiència d'un sol PS)
-
-1. PC **apagat**, Pico alimentat (port "always-on USB" o hub/extensor alimentat).
-2. Prem **PS** al comandament → connecta amb la Pico → s'envia el WoL → el PC
-   s'encén → el comandament es manté connectat durant l'arrencada.
-3. Amb el PC encès, el WiFi es tomba i tot funciona com un dongle normal.
+> The controller USB device **only shows up when the controller is connected** (by design). With `ENABLE_SERIAL=ON` a COM port appears as well.
 
 ---
 
-## 6. Diagnòstic (sense adaptador UART)
+## 5. Normal use (single-PC experience)
 
-Com que el WoL passa amb el **PC objectiu apagat**, els logs no surten per USB. Dues
-vies afegides aquest projecte:
+1. PC **off**, Pico powered (an always-on USB port or a powered hub/extender).
+2. Press **PS** on the controller → it connects to the Pico → the WoL packet is sent → the PC powers on → the controller stays connected through boot.
+3. Once the PC is on, WiFi shuts down and everything works like an ordinary dongle.
 
-### 6.1 Logs per WiFi (UDP) — `WOL_UDP_LOG`
-Build de diagnòstic que envia `printf` per UDP broadcast i manté el WiFi amunt:
+---
+
+## 6. Diagnostics (no UART adapter)
+
+Because WoL happens with the **target PC off**, logs can't come out over USB. This project adds two routes:
+
+### 6.1 Logs over WiFi (UDP) — `WOL_UDP_LOG`
+A diagnostic build that sends `printf` over UDP broadcast and keeps WiFi up:
 ```powershell
 cmake -S . -B build-udplog -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_WOL=ON -DWOL_UDP_LOG=ON -DPICO_BOARD=pico2_w
 ninja -C build-udplog ds5-bridge
 ```
-Al PC de captura (mateixa LAN que la WiFi del Pico):
+On the capture PC (same LAN as the Pico's WiFi):
 ```powershell
-# Un sol cop, com a ADMINISTRADOR: obrir el port al tallafocs
+# Once, as ADMINISTRATOR: open the firewall port
 New-NetFirewallRule -DisplayName "WoL-UDP-Log-9999" -Direction Inbound -Protocol UDP -LocalPort 9999 -Action Allow
 
-# Escoltador (no cal admin); escriu a wol-boot.log
+# Listener (no admin needed); writes to wol-boot.log
 $udp = New-Object System.Net.Sockets.UdpClient
 $udp.Client.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 9999)))
 $ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
 while ($true) { $d = $udp.Receive([ref]$ep); [System.Text.Encoding]::ASCII.GetString($d) }
 ```
-> ⚠️ `WOL_UDP_LOG` manté el WiFi actiu → estressa la coexistència BT i pot provocar
-> desconnexions que en producció NO hi són. És només per veure motius de
-> desconnexió, no per mesurar estabilitat.
+> ⚠️ `WOL_UDP_LOG` keeps WiFi active, which stresses BT coexistence and can cause disconnections that do NOT happen in production. Use it only to see why a disconnection occurred, not to measure stability.
 
-### 6.2 Forçar el WoL amb el PC encès — `WOL_FORCE_TEST`
-Per validar el camí WiFi + magic packet sense apagar el PC de proves:
+### 6.2 Force WoL with the PC on — `WOL_FORCE_TEST`
+To validate the WiFi + magic-packet path without powering off the test PC:
 ```powershell
 cmake -S . -B build-test -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_WOL=ON -DWOL_FORCE_TEST=ON -DENABLE_SERIAL=ON -DPICO_BOARD=pico2_w
 ninja -C build-test ds5-bridge
 ```
 
-### 6.3 Logs per USB CDC — `ENABLE_SERIAL`
-Amb el PC **encès**, `printf` surt per un port COM. Per llegir-lo (PowerShell):
+### 6.3 Logs over USB CDC — `ENABLE_SERIAL`
+With the PC **on**, `printf` comes out on a COM port. To read it (PowerShell):
 ```powershell
 $p = New-Object System.IO.Ports.SerialPort 'COM6',115200,'None',8,'One'
 $p.DtrEnable=$true; $p.Open()
@@ -164,15 +150,15 @@ while($true){ $p.ReadExisting() }
 
 ---
 
-## 7. Resolució de problemes
+## 7. Troubleshooting
 
-| Símptoma | Causa | Solució |
+| Symptom | Cause | Fix |
 |----------|-------|---------|
-| `*** PANIC *** Out of memory` / es penja en emparellar | **Tot** Opus a RAM + lwIP → heap esgotat | Amb `ENABLE_WOL=ON` només es relloca el camí CELT-encode (~87 KB, ~276 KB heap lliure). Si reapareix, **build net** i revisa que no s'hagin afegit més TUs/`.rodata` a la relocació (CONTEXT.md §3.4, IMPROVEMENTS.md P3) |
-| CMake: "unable to find a build program / Ninja" | Eines fora del PATH | Posa cmake/ninja/toolchain al PATH (§0) |
-| `cd : no existe ...\.pico-sdk\...` | `$USERPROFILE` en comptes de `$env:USERPROFILE` | Usa `$env:USERPROFILE` a PowerShell |
-| Errors USB/àudio | TinyUSB ≠ 0.20.0 | §1 |
-| El WoL no es dispara el 2n cop | (resolt) gating del bus suspès | Cal `tud_mounted() && !tud_suspended()` (ja aplicat) |
-| Cal prémer PS 2 cops en despertar | (resolt) apagat del comandament als 3 s de suspensió | `wake_suppress_poweroff()` (ja aplicat) |
-| El WoL no desperta el PC | MAC dolenta / sense standby USB / subxarxa | Revisa MAC; corrent standby; mateixa subxarxa L2 |
-| Semàfor en obrir COM | Firmware serial penjat o port ocupat | Replug del Pico; tanca altres processos del COM |
+| `*** PANIC *** Out of memory` / hangs while pairing | **All** of Opus in RAM + lwIP → heap exhausted | With `ENABLE_WOL=ON` only the CELT-encode path is relocated (~87 KB, ~276 KB heap free). If it returns, do a **clean build** and check that no extra TUs/`.rodata` have been added to the relocation (CONTEXT.md §3.4, IMPROVEMENTS.md P3) |
+| CMake: "unable to find a build program / Ninja" | Tools not on PATH | Put cmake/ninja/toolchain on PATH (§0) |
+| `cd : cannot find ...\.pico-sdk\...` | `$USERPROFILE` instead of `$env:USERPROFILE` | Use `$env:USERPROFILE` in PowerShell |
+| USB/audio errors | TinyUSB ≠ 0.20.0 | §1 |
+| WoL doesn't fire the second time | (resolved) gating on the suspended bus | Requires `tud_mounted() && !tud_suspended()` (already applied) |
+| Have to press PS twice to wake | (resolved) controller powered off 3 s into suspend | `wake_suppress_poweroff()` (already applied) |
+| WoL doesn't wake the PC | bad MAC / no USB standby power / wrong subnet | Check the MAC; standby current; same L2 subnet |
+| Stall when opening COM | serial firmware hung or port busy | Replug the Pico; close other processes using the COM port |

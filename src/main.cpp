@@ -313,7 +313,7 @@ int main() {
     // BT pairing logs are dropped before the capture tool connects.
     while (!stdio_usb_connected()) { tud_task(); sleep_ms(2); }
     sleep_ms(300);
-    printf("\n[DEBUG] Serial connectat -- iniciant Bluetooth...\n");
+    printf("\n[DEBUG] Serial connected -- starting Bluetooth...\n");
 #endif
 
     bt_init();

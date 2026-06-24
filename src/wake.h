@@ -14,10 +14,10 @@ void wake_on_bt_input(const uint8_t *hid_input, uint16_t len);
 void wake_on_bt_disconnect(void);
 void wake_task(void);
 void wake_note_usb_reconnect(void);
-// Suprimeix l'apagat automatic del comandament (per suspensio sostinguda)
-// durant 'duration_us'. El WoL ho crida en disparar-se: mentre el PC arrenca
-// despres del Wake-on-LAN l'USB queda suspes molts segons i sense aixo el
-// firmware apagaria el comandament al cap de 3s (causava la 2a pulsacio de PS).
+// Suppress the controller's automatic power-off (for sustained suspend)
+// for 'duration_us'. WoL calls this when triggered: while the PC boots
+// after Wake-on-LAN the USB stays suspended for many seconds, and without this
+// the firmware would power off the controller after 3s (which caused the 2nd PS press).
 void wake_suppress_poweroff(uint64_t duration_us);
 #else
 static inline void wake_init(void) {}

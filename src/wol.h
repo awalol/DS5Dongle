@@ -1,25 +1,25 @@
 //
-// Wake-on-LAN sobre WiFi (ENABLE_WOL).
+// Wake-on-LAN over WiFi (ENABLE_WOL).
 //
-// Quan el comandament es connecta (s'obre el canal L2CAP HID Interrupt), es
-// puja el WiFi en mode estació, s'envia un "magic packet" a la MAC del PC
-// definida a secrets.h i es torna a baixar el WiFi. Tot de manera NO bloquejant
-// (màquina d'estats servida des del bucle principal) per no disparar el watchdog
-// i per no interferir amb el Bluetooth del comandament.
+// When the controller connects (the L2CAP HID Interrupt channel opens), WiFi is
+// brought up in station mode, a "magic packet" is sent to the PC's MAC defined
+// in secrets.h and WiFi is brought back down. Everything is done in a NON-blocking
+// way (state machine serviced from the main loop) so as not to trip the watchdog
+// and not to interfere with the controller's Bluetooth.
 //
 
 #ifndef DS5_BRIDGE_WOL_H
 #define DS5_BRIDGE_WOL_H
 
-// Inicialitza l'estat intern. Cridar un cop, després de cyw43_arch_init().
+// Initializes the internal state. Call once, after cyw43_arch_init().
 void wol_init();
 
-// Sol·licita una seqüència de WoL. Segur de cridar des del context del callback
-// de Bluetooth: només marca una petició; la feina real (WiFi/UDP) es fa a
-// wol_tick(). Té anti-rebot intern per no repetir-se en reconnexions ràpides.
+// Requests a WoL sequence. Safe to call from the Bluetooth callback context:
+// it only flags a request; the actual work (WiFi/UDP) is done in
+// wol_tick(). It has internal debouncing so it does not repeat on fast reconnects.
 void wol_request();
 
-// Avança la màquina d'estats. Cridar a cada iteració del bucle principal.
+// Advances the state machine. Call on every iteration of the main loop.
 void wol_tick();
 
 #endif // DS5_BRIDGE_WOL_H

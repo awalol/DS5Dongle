@@ -747,8 +747,8 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
 
                     wake_on_bt_connect();
 #ifdef ENABLE_WOL
-                    // El comandament acaba de connectar-se: si el PC sembla
-                    // apagat (no enumera per USB), envia el Wake-on-LAN.
+                    // The controller has just connected: if the PC appears to be
+                    // off (does not enumerate over USB), send the Wake-on-LAN.
                     wol_request();
 #endif
 

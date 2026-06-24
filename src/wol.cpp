@@ -1,10 +1,10 @@
 //
-// Wake-on-LAN sobre WiFi. Vegeu wol.h.
+// Wake-on-LAN over WiFi. See wol.h.
 //
-// Port a la base 0.7.2: a diferència de la versió 0.6.0, NO definim
-// tud_mount_cb/tud_umount_cb (wake.cpp ja els defineix amb ENABLE_WAKE_HID).
-// Per saber si el PC està encès consultem tud_mounted() durant la finestra
-// d'observació.
+// Port to the 0.7.2 base: unlike the 0.6.0 version, we do NOT define
+// tud_mount_cb/tud_umount_cb (wake.cpp already defines them with ENABLE_WAKE_HID).
+// To tell whether the PC is on we query tud_mounted() during the observation
+// window.
 //
 
 #include "wol.h"
@@ -23,9 +23,9 @@
 #ifdef WOL_UDP_LOG
 #include "pico/stdio.h"
 #include "pico/stdio/driver.h"
-// DIAGNOSTIC: redirigeix tota la sortida de printf cap a paquets UDP broadcast
-// (port WOL_UDP_LOG_PORT) perque un PC de la mateixa xarxa pugui capturar els
-// logs de l'arrencada del PC objectiu sense adaptador UART (el PC esta apagat).
+// DIAGNOSTIC: redirect all printf output to UDP broadcast packets
+// (port WOL_UDP_LOG_PORT) so that a PC on the same network can capture the
+// boot logs of the target PC without a UART adapter (the PC is powered off).
 constexpr int WOL_UDP_LOG_PORT = 9999;
 namespace {
 udp_pcb     *g_log_pcb  = nullptr;
@@ -47,7 +47,7 @@ void udp_log_flush() {
 }
 
 void udp_log_out(const char *buf, int len) {
-    if (g_log_busy) return;            // evita recursio si lwIP imprimis
+    if (g_log_busy) return;            // avoid recursion if lwIP prints
     g_log_busy = true;
     for (int i = 0; i < len; i++) {
         const char c = buf[i];
@@ -67,49 +67,49 @@ static void udp_log_start() {
     if (g_log_pcb != nullptr) ip_set_option(g_log_pcb, SOF_BROADCAST);
     g_udp_driver.out_chars = udp_log_out;
     stdio_set_driver_enabled(&g_udp_driver, true);
-    printf("[WoL][UDP-LOG] log per WiFi actiu (broadcast:%d)\n", WOL_UDP_LOG_PORT);
+    printf("[WoL][UDP-LOG] logging over WiFi active (broadcast:%d)\n", WOL_UDP_LOG_PORT);
 }
 #endif  // WOL_UDP_LOG
 
 namespace {
 
-// Estats de la seqüència de WoL.
+// WoL sequence states.
 enum class State {
-    Idle,        // res a fer
-    Observe,     // comandament connectat: esperem a veure si el PC enumera (=encès)
-    Connecting,  // esperant associació + IP per DHCP
-    Backoff,     // espera curta entre reintents de connexió
-    Sending,     // enviant els magic packets
-    Cleanup      // baixant el WiFi
+    Idle,        // nothing to do
+    Observe,     // controller connected: wait to see if the PC enumerates (=on)
+    Connecting,  // waiting for association + IP via DHCP
+    Backoff,     // short wait between connection retries
+    Sending,     // sending the magic packets
+    Cleanup      // bringing the WiFi down
 };
 
 State           state         = State::Idle;
 absolute_time_t state_since;
-absolute_time_t last_attempt;          // per a l'anti-rebot
+absolute_time_t last_attempt;          // for debouncing
 absolute_time_t observe_since;
 absolute_time_t backoff_since;
 absolute_time_t next_packet_time;
 int             retries        = 0;
 int             packets_sent   = 0;
 
-// Finestra d'observació: si el PC està encès, el dispositiu USB estarà (o
-// passarà a estar) muntat dins d'aquest temps després de connectar el
-// comandament -> NO cal WoL. Si no es munta, assumim PC apagat i enviem.
+// Observation window: if the PC is on, the USB device will be (or will
+// become) mounted within this time after the controller connects -> no WoL
+// needed. If it does not mount, we assume the PC is off and send.
 constexpr int64_t HOST_OBSERVE_US    = 3'000'000;    // 3 s
 constexpr int64_t CONNECT_TIMEOUT_US = 20'000'000;   // 20 s
-constexpr int64_t DEBOUNCE_US        = 90'000'000;   // 90 s: cobreix tot l'arrencada
-                                                     // del PC perque les reconnexions
-                                                     // del comandament durant el boot no
-                                                     // tornin a disparar WoL/WiFi
-constexpr int64_t BACKOFF_US         = 1'500'000;    // 1.5 s entre reintents
+constexpr int64_t DEBOUNCE_US        = 90'000'000;   // 90 s: covers the whole PC
+                                                     // boot so that controller
+                                                     // reconnections during boot do
+                                                     // not retrigger WoL/WiFi
+constexpr int64_t BACKOFF_US         = 1'500'000;    // 1.5 s between retries
 constexpr int     MAX_RETRIES        = 2;
-constexpr int     NUM_PACKETS        = 3;            // redundància
-constexpr int64_t PACKET_GAP_US      = 200'000;     // 200 ms entre paquets
-// Mentre el PC arrenca despres del WoL, suprimim l'apagat automatic del
-// comandament (wake.cpp) perque no es talli a mig boot. Cobreix tota l'arrencada.
+constexpr int     NUM_PACKETS        = 3;            // redundancy
+constexpr int64_t PACKET_GAP_US      = 200'000;     // 200 ms between packets
+// While the PC boots after the WoL, we suppress the controller's automatic
+// power-off (wake.cpp) so it does not cut out mid-boot. Covers the whole boot.
 constexpr int64_t POWEROFF_SUPPRESS_US = 180'000'000;  // 180 s
 
-// Converteix "AA:BB:CC:DD:EE:FF" (o amb '-') a 6 bytes. Retorna true si OK.
+// Converts "AA:BB:CC:DD:EE:FF" (or with '-') to 6 bytes. Returns true if OK.
 bool parse_mac(const char *str, uint8_t out[6]) {
     unsigned int v[6];
     int n = sscanf(str, "%2x:%2x:%2x:%2x:%2x:%2x",
@@ -126,7 +126,7 @@ bool parse_mac(const char *str, uint8_t out[6]) {
 void start_connect() {
     cyw43_arch_enable_sta_mode();
     if (cyw43_arch_wifi_connect_async(WIFI_SSID, WIFI_PASS, CYW43_AUTH_WPA2_AES_PSK) != 0) {
-        printf("[WoL] connect_async no s'ha pogut iniciar\n");
+        printf("[WoL] connect_async could not be started\n");
         cyw43_arch_disable_sta_mode();
         state = State::Idle;
         return;
@@ -138,11 +138,11 @@ void start_connect() {
 void send_magic_packet() {
     uint8_t mac[6];
     if (!parse_mac(WOL_TARGET_MAC, mac)) {
-        printf("[WoL] MAC invàlida a secrets.h: %s\n", WOL_TARGET_MAC);
+        printf("[WoL] invalid MAC in secrets.h: %s\n", WOL_TARGET_MAC);
         return;
     }
 
-    // Magic packet: 6x 0xFF + 16x la MAC del destí = 102 bytes.
+    // Magic packet: 6x 0xFF + 16x the target MAC = 102 bytes.
     uint8_t magic[6 + 16 * 6];
     memset(magic, 0xFF, 6);
     for (int i = 0; i < 16; i++) {
@@ -151,7 +151,7 @@ void send_magic_packet() {
 
     udp_pcb *pcb = udp_new();
     if (pcb == nullptr) {
-        printf("[WoL] udp_new ha fallat\n");
+        printf("[WoL] udp_new failed\n");
         return;
     }
     ip_set_option(pcb, SOF_BROADCAST);
@@ -164,7 +164,7 @@ void send_magic_packet() {
     memcpy(p->payload, magic, sizeof(magic));
 
     ip_addr_t dest;
-    IP4_ADDR(&dest, 255, 255, 255, 255);   // broadcast limitat a la subxarxa local
+    IP4_ADDR(&dest, 255, 255, 255, 255);   // broadcast limited to the local subnet
 
     const err_t e = udp_sendto(pcb, p, &dest, WOL_PORT);
     pbuf_free(p);
@@ -173,7 +173,7 @@ void send_magic_packet() {
     if (e != ERR_OK) {
         printf("[WoL] udp_sendto error=%d\n", e);
     } else {
-        printf("[WoL] Magic packet enviat a %s (port %d)\n", WOL_TARGET_MAC, WOL_PORT);
+        printf("[WoL] Magic packet sent to %s (port %d)\n", WOL_TARGET_MAC, WOL_PORT);
     }
 }
 
@@ -188,20 +188,20 @@ void wol_init() {
 
 void wol_request() {
     if (state != State::Idle) {
-        return;  // ja hi ha una seqüència en curs
+        return;  // a sequence is already in progress
     }
     if (!is_nil_time(last_attempt) &&
         absolute_time_diff_us(last_attempt, get_absolute_time()) < DEBOUNCE_US) {
-        return;  // anti-rebot: massa aviat des de l'últim WoL
+        return;  // debounce: too soon since the last WoL
     }
     last_attempt = get_absolute_time();
     retries = 0;
     observe_since = get_absolute_time();
     state = State::Observe;
-    // El comandament acaba de connectar i potser despertarem el PC: evita que
-    // l'apagat per suspensio sostinguda talli el comandament mentre el PC arrenca.
+    // The controller just connected and we may wake the PC: prevent the
+    // sustained-suspend power-off from cutting the controller while the PC boots.
     wake_suppress_poweroff(POWEROFF_SUPPRESS_US);
-    printf("[WoL] Comandament connectat; observant si el PC enumera (%lld ms)\n",
+    printf("[WoL] Controller connected; observing whether the PC enumerates (%lld ms)\n",
            static_cast<long long>(HOST_OBSERVE_US / 1000));
 }
 
@@ -212,29 +212,29 @@ void wol_tick() {
 
         case State::Observe:
 #ifdef WOL_FORCE_TEST
-            // MODE DE PROVA: ignora el gating del PC encès i puja el WiFi sempre,
-            // per validar tot el camí (associació + IP + magic packet) amb el PC
-            // de desenvolupament encès. NO usar en producció.
-            printf("[WoL] (TEST) forçant WoL: ignoro el gating del PC i pujo WiFi\n");
+            // TEST MODE: ignore the PC-on gating and always bring up the WiFi,
+            // to validate the whole path (association + IP + magic packet) with the
+            // development PC powered on. Do NOT use in production.
+            printf("[WoL] (TEST) forcing WoL: ignoring the PC gating and bringing up WiFi\n");
             start_connect();
             return;
 #else
-            // El PC nomes es considera "ences" si el dispositiu USB esta muntat
-            // I el bus esta ACTIU (no suspes). Quan el PC s'apaga (S5) pero el port
-            // segueix donant corrent standby, el bus queda SUSPES i tud_mounted()
-            // continua true -> per aixo NO n'hi ha prou amb tud_mounted(): cal
-            // exigir tambe !tud_suspended(). Aixi:
-            //   - PC ences i actiu        -> mounted && !suspended -> avortar WoL
-            //   - PC adormit S3           -> el USB remote wakeup (wake.cpp) el desperta
-            //                                dins la finestra -> passa a actiu -> avortar
-            //   - PC apagat S5 (standby)  -> queda suspes/desmuntat -> disparar WoL
+            // The PC is only considered "on" if the USB device is mounted
+            // AND the bus is ACTIVE (not suspended). When the PC powers off (S5) but the
+            // port still supplies standby power, the bus stays SUSPENDED and tud_mounted()
+            // remains true -> that's why tud_mounted() alone is not enough: we must
+            // also require !tud_suspended(). So:
+            //   - PC on and active       -> mounted && !suspended -> abort WoL
+            //   - PC asleep S3           -> USB remote wakeup (wake.cpp) wakes it
+            //                                within the window -> becomes active -> abort
+            //   - PC off S5 (standby)    -> stays suspended/unmounted -> fire WoL
             if (tud_mounted() && !tud_suspended()) {
-                printf("[WoL] Host USB actiu (PC ences): WoL avortat\n");
+                printf("[WoL] USB host active (PC on): WoL aborted\n");
                 state = State::Idle;
                 return;
             }
             if (absolute_time_diff_us(observe_since, get_absolute_time()) > HOST_OBSERVE_US) {
-                printf("[WoL] El PC sembla apagat/suspes; pujant WiFi per al magic packet\n");
+                printf("[WoL] The PC seems off/suspended; bringing up WiFi for the magic packet\n");
                 start_connect();
             }
             return;
@@ -243,7 +243,7 @@ void wol_tick() {
         case State::Connecting: {
             const int link = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
             if (link == CYW43_LINK_UP) {
-                printf("[WoL] WiFi amb IP; enviant magic packets\n");
+                printf("[WoL] WiFi has IP; sending magic packets\n");
 #ifdef WOL_UDP_LOG
                 udp_log_start();
 #endif
@@ -253,20 +253,20 @@ void wol_tick() {
                 return;
             }
             if (link == CYW43_LINK_BADAUTH) {
-                // Error permanent: credencials incorrectes. Reintentar no ajuda.
-                printf("[WoL] Credencials WiFi incorrectes (BADAUTH); s'avorta\n");
+                // Permanent error: wrong credentials. Retrying won't help.
+                printf("[WoL] Wrong WiFi credentials (BADAUTH); aborting\n");
                 state = State::Cleanup;
                 return;
             }
-            const bool failed = (link < 0);  // FAIL / NONET (poden ser transitoris)
+            const bool failed = (link < 0);  // FAIL / NONET (may be transient)
             const bool timed_out =
                 absolute_time_diff_us(state_since, get_absolute_time()) > CONNECT_TIMEOUT_US;
             if (failed || timed_out) {
-                printf("[WoL] connexió fallida/timeout (link=%d, retry=%d)\n", link, retries);
+                printf("[WoL] connection failed/timeout (link=%d, retry=%d)\n", link, retries);
                 if (retries < MAX_RETRIES) {
                     retries++;
                     backoff_since = get_absolute_time();
-                    state = State::Backoff;   // espera curta abans de reintentar
+                    state = State::Backoff;   // short wait before retrying
                 } else {
                     state = State::Cleanup;
                 }
@@ -276,7 +276,7 @@ void wol_tick() {
 
         case State::Backoff:
             if (absolute_time_diff_us(backoff_since, get_absolute_time()) > BACKOFF_US) {
-                start_connect();   // manté STA activat; nou intent d'associació
+                start_connect();   // keeps STA enabled; new association attempt
             }
             return;
 
@@ -287,9 +287,9 @@ void wol_tick() {
                 next_packet_time = delayed_by_us(get_absolute_time(), PACKET_GAP_US);
                 if (packets_sent >= NUM_PACKETS) {
 #ifdef WOL_UDP_LOG
-                    // Mantenim el WiFi amunt per seguir enviant logs durant l'arrencada
-                    // del PC objectiu (per capturar la desconnexio del BT i el seu motiu).
-                    printf("[WoL][UDP-LOG] paquets enviats; mantinc WiFi amunt per capturar el boot\n");
+                    // We keep the WiFi up to keep sending logs during the target PC's
+                    // boot (to capture the BT disconnection and its reason).
+                    printf("[WoL][UDP-LOG] packets sent; keeping WiFi up to capture the boot\n");
                     state = State::Idle;
 #else
                     state = State::Cleanup;
@@ -299,7 +299,7 @@ void wol_tick() {
             return;
 
         case State::Cleanup:
-            printf("[WoL] Baixant el WiFi\n");
+            printf("[WoL] Bringing the WiFi down\n");
             cyw43_arch_disable_sta_mode();
             state = State::Idle;
             return;

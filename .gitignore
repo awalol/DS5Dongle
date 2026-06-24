@@ -14,3 +14,6 @@ example
 # Credencials locals del WoL (WiFi/MAC) — no s'han de pujar mai.
 # Conte la contrasenya del WiFi; usa secrets.h.example com a plantilla.
 src/secrets.h
+
+# Catalan copies of the docs (personal use, not part of the repo)
+docs-ca/
