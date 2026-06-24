@@ -1,4 +1,5 @@
 build
+build-*/
 .deps
 .vscode
 .idea
@@ -6,3 +7,10 @@ example
 .DS_Store
 .cache
 /tools/__pycache__
+
+# Logs de diagnostic generats en proves (WoL/serial)
+*.log
+
+# Credencials locals del WoL (WiFi/MAC) — no s'han de pujar mai.
+# Conte la contrasenya del WiFi; usa secrets.h.example com a plantilla.
+src/secrets.h
