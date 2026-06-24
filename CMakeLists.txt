@@ -83,7 +83,7 @@ else ()
         set(CYW43_LWIP_VALUE 0)
 endif ()
 if (ENABLE_WOL AND PICO_W_BUILD)
-        message(WARNING "ENABLE_WOL + PICO_W_BUILD: build de RAM ajustada al RP2040 (264KB). Considera reduir PBUF_POOL_SIZE a src/lwipopts.h si el link no cap.")
+        message(WARNING "ENABLE_WOL + PICO_W_BUILD: RAM-tight build on the RP2040 (264KB). Consider reducing PBUF_POOL_SIZE in src/lwipopts.h if the link does not fit.")
 endif ()
 option(PICO_W_BUILD "Build for Rasberry Pi Pico W, audio is missing" OFF)
 if (PICO_W_BUILD)
@@ -159,17 +159,25 @@ add_subdirectory(lib/opus)
 # libopus is built by add_subdirectory(lib/opus); the target `opus` is defined in
 # the subdirectory's CMakeLists.txt, so we can't use POST_BUILD here. Instead we
 # use a stamp-file custom command + custom target that runs after opus is built
-# and before ds5-bridge links. Renames .text and .rodata of libopus.a to
-# .time_critical.* which the Pico SDK linker places in RAM (loaded from flash
-# at boot, executed from RAM at runtime). ~220 KB total relocated, ~5-6 ms boot
-# time impact for the flash-to-RAM copy.
-# Quan ENABLE_WOL esta actiu, NO relloquem libopus a RAM: els ~220 KB de codi
-# d'Opus es queden a flash (XIP) i alliberen aquesta RAM per a lwIP/WiFi + heap.
-# Sense aixo el firmware es queda sense memoria (malloc fail -> PANIC "Out of memory")
-# i es penja durant l'emparellament. El cost es que el codec d'audio corre des de
-# flash (possible perdua de qualitat a l'altaveu/auriculars del comandament).
-# El build stock (sense WoL) manté Opus a RAM com a l'original.
-if (NOT ENABLE_WOL)
+# and before ds5-bridge links. It renames .text (and .rodata in the stock build)
+# of libopus.a to .time_critical.*, which the Pico SDK linker places in RAM
+# (loaded from flash at boot, executed from RAM at runtime), at a few ms of boot
+# time for the flash-to-RAM copy.
+#
+# Two strategies, selected by ENABLE_WOL:
+#   - Stock build (no WoL): relocate the WHOLE archive (~220 KB) to RAM, as in the
+#     original firmware -- the heap has room for it.
+#   - WoL build: lwIP shares the heap, so relocating the whole archive runs the
+#     allocator out of memory during BT pairing (malloc fail -> PANIC). Instead we
+#     relocate ONLY the CELT codec hot path (encode + decode, ~104 KB), which is
+#     all the audio path ever executes; the rest of libopus (SILK, etc.) stays in
+#     flash. Audio is glitch-free and the heap stays large enough to pair safely.
+if (PICO_W_BUILD)
+    # Pico W (RP2040): only 264 KB RAM and audio is disabled there
+    # (DISABLE_SPEAKER_PROC=1), so there is neither room nor reason to move Opus to
+    # RAM. Keep the whole library in flash (XIP).
+    message(STATUS "Pico W (RP2040): Opus stays in flash (no RAM relocation)")
+elseif (NOT ENABLE_WOL)
     # Stock build (no WoL): relocate the WHOLE libopus to RAM (original behavior).
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
@@ -196,11 +204,13 @@ else ()
     # First 18 members = CELT encode set; last 3 = incremental CELT decode set
     # (celt_decoder + opus_decoder + entdec; the rest of the decode path -- kiss_fft,
     # mdct, bands, etc. -- is already shared with the encode set above).
+    # Names are EXTENSIONLESS: the script resolves <base>.o (Linux) or <base>.obj
+    # (Windows/Ninja) from the actual archive contents.
     # Derive the RAW binutils ar from CMAKE_OBJCOPY's path (NOT gcc-ar, which would
     # load the LTO plugin).
     string(REPLACE "objcopy" "ar" OPUS_RELOC_AR "${CMAKE_OBJCOPY}")
     set(OPUS_RAM_MEMBERS
-        "celt_encoder.c.obj|opus_encoder.c.obj|bands.c.obj|quant_bands.c.obj|rate.c.obj|vq.c.obj|pitch.c.obj|opus.c.obj|kiss_fft.c.obj|entenc.c.obj|celt_lpc.c.obj|cwrs.c.obj|mdct.c.obj|laplace.c.obj|celt.c.obj|mathops.c.obj|modes.c.obj|entcode.c.obj|celt_decoder.c.obj|opus_decoder.c.obj|entdec.c.obj")
+        "celt_encoder.c|opus_encoder.c|bands.c|quant_bands.c|rate.c|vq.c|pitch.c|opus.c|kiss_fft.c|entenc.c|celt_lpc.c|cwrs.c|mdct.c|laplace.c|celt.c|mathops.c|modes.c|entcode.c|celt_decoder.c|opus_decoder.c|entdec.c")
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
         COMMAND ${CMAKE_COMMAND}
@@ -386,19 +396,19 @@ if(WAKE_DEBUG)
     )
 endif()
 
-option(WOL_FORCE_TEST "DEBUG: força el WoL en cada connexió ignorant el gating del PC encès" OFF)
-option(WOL_UDP_LOG "DEBUG: redirigeix printf a UDP broadcast (logs per WiFi, sense UART) i manté el WiFi amunt" OFF)
+option(WOL_FORCE_TEST "DEBUG: force WoL on every connection, ignoring the PC-powered-on gating" OFF)
+option(WOL_UDP_LOG "DEBUG: redirect printf to UDP broadcast (logs over WiFi, no UART) and keep WiFi up" OFF)
 if (ENABLE_WOL)
     target_compile_definitions(ds5-bridge PRIVATE
             ENABLE_WOL
     )
     if (WOL_FORCE_TEST)
         target_compile_definitions(ds5-bridge PRIVATE WOL_FORCE_TEST)
-        message(STATUS "WOL_FORCE_TEST actiu: el WoL es disparara sempre (mode prova)")
+        message(STATUS "WOL_FORCE_TEST active: WoL will always fire (test mode)")
     endif()
     if (WOL_UDP_LOG)
         target_compile_definitions(ds5-bridge PRIVATE WOL_UDP_LOG)
-        message(STATUS "WOL_UDP_LOG actiu: logs per UDP broadcast i WiFi es mante amunt (mode diagnostic)")
+        message(STATUS "WOL_UDP_LOG active: logs over UDP broadcast and WiFi stays up (diagnostic mode)")
     endif()
     target_sources(ds5-bridge PRIVATE
             src/wol.cpp
@@ -439,8 +449,9 @@ target_link_libraries(ds5-bridge
         opus
 )
 
-# El xip CYW43 fa BT i WiFi alhora. Sense WoL només cal el BT (arch "none" en
-# mode poll). Amb WoL cal la pila lwIP per enviar el magic packet UDP.
+# The CYW43 chip handles BT and WiFi at the same time. Without WoL only BT is
+# needed (arch "none" in poll mode). With WoL the lwIP stack is needed to send
+# the UDP magic packet.
 if (ENABLE_WOL)
         target_link_libraries(ds5-bridge pico_cyw43_arch_lwip_poll)
 else ()
@@ -448,4 +459,3 @@ else ()
 endif ()
 
 pico_add_extra_outputs(ds5-bridge)
-
