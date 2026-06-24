@@ -4,8 +4,6 @@
 
 #include <array>
 #include <cstdint>
-#include <iomanip>
-#include <iostream>
 
 #include "hci_cmd.h"
 
@@ -411,9 +409,3 @@ struct __attribute__((packed)) SetStateData { // 47
 // Structure ends here though on BT there is padding and a CRC, see ReportOut31
 };
 
-inline void print_hex(const uint8_t* data,size_t size) {
-    for (int i = 0; i < size; i++) {
-        std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(data[i]) << " ";
-    }
-    std::cout << std::endl;
-}

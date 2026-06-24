@@ -5,7 +5,6 @@
 #include <cstdio>
 #include <cstring>
 #include "bt.h"
-#include <queue>
 #include <unordered_map>
 #include <vector>
 #include "btstack_event.h"
@@ -40,7 +39,6 @@
 
 using std::unordered_map;
 using std::vector;
-using std::queue;
 
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 

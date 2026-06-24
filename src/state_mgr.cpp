@@ -4,6 +4,7 @@
 
 #include "state_mgr.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "config.h"
