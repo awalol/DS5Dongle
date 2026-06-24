@@ -76,6 +76,9 @@ static uint8_t prev_b9 = 0x00;
 static volatile uint64_t suspend_at_us = 0;
 // During a deliberate USB reconnect, ignore the suspend it triggers until this time.
 static volatile uint64_t reconnect_until_us = 0;
+// While set (future timestamp), the sustained-suspend controller power-off is
+// suppressed. Armed by the WoL path while the host boots after a magic packet.
+static volatile uint64_t poweroff_suppress_until_us = 0;
 
 static void enter_state(wake_state_t s) {
     state = s;
@@ -122,6 +125,16 @@ void wake_init(void) {
 void wake_note_usb_reconnect(void) {
     reconnect_until_us = time_us_64() + WAKE_RECONNECT_GRACE_US;
     suspend_at_us = 0;
+}
+
+// Called by the WoL path when a magic packet is sent: while the woken host
+// boots, its USB stays suspended for many seconds. Without this the sustained-
+// suspend debounce would power the controller off mid-boot, forcing a second PS
+// press. Suppress that power-off for 'duration_us' and drop any pending one.
+void wake_suppress_poweroff(uint64_t duration_us) {
+    const uint64_t until = time_us_64() + duration_us;
+    if (until > poweroff_suppress_until_us) poweroff_suppress_until_us = until;
+    suspend_at_us = 0;   // cancel any power-off about to fire
 }
 
 extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
@@ -237,9 +250,16 @@ void wake_task(void) {
     // been cancelled by tud_resume_cb / tud_mount_cb before this fires.
     if (suspend_at_us != 0 && host_suspended &&
         now - suspend_at_us >= WAKE_POWEROFF_DEBOUNCE_US) {
-        bt_power_off_controller();
-        suspend_at_us = 0;
-        WAKE_DBG("suspend debounce elapsed -> bt_power_off_controller()");
+        if (now < poweroff_suppress_until_us) {
+            // WoL-initiated boot in progress: keep the controller powered on so
+            // it stays connected through the host boot (no second PS press). The
+            // power-off will still fire later if the host never actually comes up.
+            WAKE_DBG("suspend debounce elapsed but power-off suppressed (WoL boot)");
+        } else {
+            bt_power_off_controller();
+            suspend_at_us = 0;
+            WAKE_DBG("suspend debounce elapsed -> bt_power_off_controller()");
+        }
     }
 
     // The wake-UP FSM below only runs when wake is enabled.
