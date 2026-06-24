@@ -27,6 +27,9 @@
 #if ENABLE_BATT_LED
 #include "battery_led.h"
 #endif
+#ifdef ENABLE_WOL
+#include "wol.h"
+#endif
 
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
@@ -304,11 +307,24 @@ int main() {
 
     config_load();
 
+#if ENABLE_SERIAL
+    // DEBUG: hold the Bluetooth bring-up until a serial terminal opens (DTR),
+    // pumping tud_task() so USB enumeration completes. This guarantees no early
+    // BT pairing logs are dropped before the capture tool connects.
+    while (!stdio_usb_connected()) { tud_task(); sleep_ms(2); }
+    sleep_ms(300);
+    printf("\n[DEBUG] Serial connectat -- iniciant Bluetooth...\n");
+#endif
+
     bt_init();
     bt_register_data_callback(on_bt_data);
 
     audio_init();
     state_init();
+
+#ifdef ENABLE_WOL
+    wol_init();
+#endif
 
 #if !ENABLE_SERIAL
     watchdog_enable(1000, true);
@@ -329,5 +345,8 @@ int main() {
         button_check();
         bt_inquiring_led();
         dse_task();
+#ifdef ENABLE_WOL
+        wol_tick();
+#endif
     }
 }

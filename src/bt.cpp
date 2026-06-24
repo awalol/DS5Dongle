@@ -20,6 +20,9 @@
 #include "state_mgr.h"
 #include "dse.h"
 #include "wake.h"
+#ifdef ENABLE_WOL
+#include "wol.h"
+#endif
 #include "pico/util/queue.h"
 #if ENABLE_BATT_LED
 #include "battery_led.h"
@@ -745,6 +748,11 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                     printf("[L2CAP] Remote Interrupt MTU: %d\n",mtu);
 
                     wake_on_bt_connect();
+#ifdef ENABLE_WOL
+                    // El comandament acaba de connectar-se: si el PC sembla
+                    // apagat (no enumera per USB), envia el Wake-on-LAN.
+                    wol_request();
+#endif
 
                     gap_connectable_control(false);
                     gap_discoverable_control(false);
