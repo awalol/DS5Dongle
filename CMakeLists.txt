@@ -110,6 +110,19 @@ project(ds5-bridge C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+# GUARDRAIL: -flto / IPO is INCOMPATIBLE with the .time_critical objcopy
+# relocation scheme used below (relocate_to_ram / relocate_archive_members).
+# Those rename .text(.fn) -> .time_critical.* on the COMPILED objects at PRE_LINK;
+# with LTO, codegen is deferred past PRE_LINK so the objects hold GIMPLE bytecode,
+# not real .text sections -- the renames would silently no-op and every hot path
+# (audio/BT/USB/cyw43/Opus) would fall back to flash/XIP, wrecking latency with no
+# error. Fail loudly at configure time if anyone ever turns IPO on.
+if (CMAKE_INTERPROCEDURAL_OPTIMIZATION OR CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE)
+    message(FATAL_ERROR "IPO/-flto is incompatible with the .time_critical objcopy "
+            "relocation scheme (see relocate_to_ram / relocate_archive_members). "
+            "Disable IPO or remove the relocation scheme before enabling LTO.")
+endif ()
+
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(ds5-bridge
@@ -157,6 +170,7 @@ add_subdirectory(lib/opus)
 # flash (possible perdua de qualitat a l'altaveu/auriculars del comandament).
 # El build stock (sense WoL) manté Opus a RAM com a l'original.
 if (NOT ENABLE_WOL)
+    # Stock build (no WoL): relocate the WHOLE libopus to RAM (original behavior).
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
         COMMAND ${CMAKE_OBJCOPY} --rename-section .text=.time_critical.opus_text --rename-section .rodata=.time_critical.opus_rodata --rename-section .rodata.str1.4=.time_critical.opus_strings $<TARGET_FILE:opus>
@@ -168,7 +182,41 @@ if (NOT ENABLE_WOL)
     add_custom_target(opus_ram_relocate ALL DEPENDS ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp)
     add_dependencies(ds5-bridge opus_ram_relocate)
 else ()
-    message(STATUS "ENABLE_WOL: libopus es queda a flash (no es relloca a RAM) per alliberar ~220 KB de RAM")
+    # WoL build: SELECTIVE relocation -- move ONLY the Opus CELT hot path (encode +
+    # decode, ~104 KB of .text across 21 TUs) into RAM, not the whole 241 KB archive.
+    # Both directions run CELT-only: the speaker encoder uses
+    # OPUS_APPLICATION_RESTRICTED_LOWDELAY, and the DualSense mic uplink is CELT-only
+    # 48 kHz fullband 10 ms (SILK cannot represent 48 kHz fullband -- verified). So
+    # every silk_* TU is never executed on the audio path and stays in flash.
+    # This kills the per-frame XIP-miss stalls on core1's encode (speaker/haptics)
+    # AND decode (mic) loops -- audio perfect both ways -- while leaving ~259 KB free
+    # heap, still >100 KB above the level that OOM'd during BT pairing when the WHOLE
+    # archive was relocated to RAM. The per-frame table .rodata stays in flash
+    # (optional future step; see IMPROVEMENTS.md). Only .text is renamed here.
+    # First 18 members = CELT encode set; last 3 = incremental CELT decode set
+    # (celt_decoder + opus_decoder + entdec; the rest of the decode path -- kiss_fft,
+    # mdct, bands, etc. -- is already shared with the encode set above).
+    # Derive the RAW binutils ar from CMAKE_OBJCOPY's path (NOT gcc-ar, which would
+    # load the LTO plugin).
+    string(REPLACE "objcopy" "ar" OPUS_RELOC_AR "${CMAKE_OBJCOPY}")
+    set(OPUS_RAM_MEMBERS
+        "celt_encoder.c.obj|opus_encoder.c.obj|bands.c.obj|quant_bands.c.obj|rate.c.obj|vq.c.obj|pitch.c.obj|opus.c.obj|kiss_fft.c.obj|entenc.c.obj|celt_lpc.c.obj|cwrs.c.obj|mdct.c.obj|laplace.c.obj|celt.c.obj|mathops.c.obj|modes.c.obj|entcode.c.obj|celt_decoder.c.obj|opus_decoder.c.obj|entdec.c.obj")
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
+        COMMAND ${CMAKE_COMMAND}
+            "-DAR=${OPUS_RELOC_AR}"
+            "-DOBJCOPY=${CMAKE_OBJCOPY}"
+            "-DARCHIVE=$<TARGET_FILE:opus>"
+            "-DMEMBERS=${OPUS_RAM_MEMBERS}"
+            "-DWORKDIR=${CMAKE_BINARY_DIR}/opus_reloc_tmp"
+            -P "${CMAKE_SOURCE_DIR}/cmake/relocate_archive_members.cmake"
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
+        DEPENDS $<TARGET_FILE:opus> ${CMAKE_SOURCE_DIR}/cmake/relocate_archive_members.cmake
+        COMMENT "Phase A.3 (WoL): relocating Opus CELT encode+decode hot path to RAM (.time_critical.opus_text)"
+        VERBATIM
+    )
+    add_custom_target(opus_ram_relocate ALL DEPENDS ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp)
+    add_dependencies(ds5-bridge opus_ram_relocate)
 endif ()
 
 target_compile_options(wdl_resampler PRIVATE -fsigned-char)
@@ -230,6 +278,16 @@ relocate_to_ram(lib/cyw43-driver/src/cyw43_ll.c.o
 relocate_to_ram(lib/cyw43-driver/src/cyw43_ctrl.c.o
     ".text.cyw43_poll_func=.time_critical.cyw43_poll_func|.text.cyw43_bluetooth_hci_read=.time_critical.cyw43_bluetooth_hci_read|.text.cyw43_bluetooth_hci_write=.time_critical.cyw43_bluetooth_hci_write"
     "Phase B.2: cyw43 poll + BT HCI bus -> RAM")
+# Phase B.2 (perf release): the btstack<->cyw43 HCI transport bridge ran from
+# flash, adding an XIP-miss on the per-packet RX drain (data_source_process),
+# the per-packet TX (send_packet) and the HCI read pump (bluetooth_hci_process)
+# that feed the haptics/speaker BT reports. Section names verified present in
+# btstack_hci_transport_cyw43.c.o (objdump -h); ~152 B to RAM for per-packet
+# BT-path latency. objcopy no-ops any absent section, so this stays safe across
+# SDK bumps.
+relocate_to_ram(src/rp2_common/pico_cyw43_driver/btstack_hci_transport_cyw43.c.o
+    ".text.hci_transport_data_source_process=.time_critical.hci_transport_ds_process|.text.hci_transport_cyw43_send_packet=.time_critical.hci_transport_cyw43_send|.text.cyw43_bluetooth_hci_process=.time_critical.cyw43_bluetooth_hci_process"
+    "Phase B.2: btstack<->cyw43 HCI transport bridge -> RAM")
 
 # --- Phase B.3: Tier-2 -- run-loop TX pumps + per-transfer submit paths ---
 # state_update is intentionally NOT moved: it runs on the host->controller HID-OUT
