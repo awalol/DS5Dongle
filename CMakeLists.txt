@@ -76,6 +76,15 @@ if (DISABLE_SPEAKER_PROC)
 else ()
         set(DISABLE_SPEAKER_PROC_VALUE 0)
 endif ()
+option(ENABLE_WOL "Send a Wake-on-LAN magic packet over WiFi when the controller connects" ON)
+if (ENABLE_WOL)
+        set(CYW43_LWIP_VALUE 1)
+else ()
+        set(CYW43_LWIP_VALUE 0)
+endif ()
+if (ENABLE_WOL AND PICO_W_BUILD)
+        message(WARNING "ENABLE_WOL + PICO_W_BUILD: build de RAM ajustada al RP2040 (264KB). Considera reduir PBUF_POOL_SIZE a src/lwipopts.h si el link no cap.")
+endif ()
 option(PICO_W_BUILD "Build for Rasberry Pi Pico W, audio is missing" OFF)
 if (PICO_W_BUILD)
         set(CYW43_PIO_CLOCK_DIV_VALUE 3)
@@ -141,16 +150,26 @@ add_subdirectory(lib/opus)
 # .time_critical.* which the Pico SDK linker places in RAM (loaded from flash
 # at boot, executed from RAM at runtime). ~220 KB total relocated, ~5-6 ms boot
 # time impact for the flash-to-RAM copy.
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
-    COMMAND ${CMAKE_OBJCOPY} --rename-section .text=.time_critical.opus_text --rename-section .rodata=.time_critical.opus_rodata --rename-section .rodata.str1.4=.time_critical.opus_strings $<TARGET_FILE:opus>
-    COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
-    DEPENDS $<TARGET_FILE:opus>
-    COMMENT "Phase A.3: relocating libopus to .time_critical.* sections"
-    VERBATIM
-)
-add_custom_target(opus_ram_relocate ALL DEPENDS ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp)
-add_dependencies(ds5-bridge opus_ram_relocate)
+# Quan ENABLE_WOL esta actiu, NO relloquem libopus a RAM: els ~220 KB de codi
+# d'Opus es queden a flash (XIP) i alliberen aquesta RAM per a lwIP/WiFi + heap.
+# Sense aixo el firmware es queda sense memoria (malloc fail -> PANIC "Out of memory")
+# i es penja durant l'emparellament. El cost es que el codec d'audio corre des de
+# flash (possible perdua de qualitat a l'altaveu/auriculars del comandament).
+# El build stock (sense WoL) manté Opus a RAM com a l'original.
+if (NOT ENABLE_WOL)
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
+        COMMAND ${CMAKE_OBJCOPY} --rename-section .text=.time_critical.opus_text --rename-section .rodata=.time_critical.opus_rodata --rename-section .rodata.str1.4=.time_critical.opus_strings $<TARGET_FILE:opus>
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
+        DEPENDS $<TARGET_FILE:opus>
+        COMMENT "Phase A.3: relocating libopus to .time_critical.* sections"
+        VERBATIM
+    )
+    add_custom_target(opus_ram_relocate ALL DEPENDS ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp)
+    add_dependencies(ds5-bridge opus_ram_relocate)
+else ()
+    message(STATUS "ENABLE_WOL: libopus es queda a flash (no es relloca a RAM) per alliberar ~220 KB de RAM")
+endif ()
 
 target_compile_options(wdl_resampler PRIVATE -fsigned-char)
 
@@ -274,7 +293,7 @@ endif()
 target_compile_definitions(bs2_default PRIVATE PICO_FLASH_SPI_CLKDIV=${PICO_FLASH_SPI_CLKDIV})
 target_compile_definitions(ds5-bridge PRIVATE PICO_EMBED_XIP_SETUP=1)
 target_compile_definitions(ds5-bridge PRIVATE
-        CYW43_LWIP=0
+        CYW43_LWIP=${CYW43_LWIP_VALUE}
         ENABLE_SERIAL=${ENABLE_SERIAL_VALUE}
         # 0 (not 1): flash_safe_execute() must really park core1 while flash is
         # accessed - both config_save() and the BOOTSEL CSn float poll. core1_entry
@@ -309,6 +328,25 @@ if(WAKE_DEBUG)
     )
 endif()
 
+option(WOL_FORCE_TEST "DEBUG: força el WoL en cada connexió ignorant el gating del PC encès" OFF)
+option(WOL_UDP_LOG "DEBUG: redirigeix printf a UDP broadcast (logs per WiFi, sense UART) i manté el WiFi amunt" OFF)
+if (ENABLE_WOL)
+    target_compile_definitions(ds5-bridge PRIVATE
+            ENABLE_WOL
+    )
+    if (WOL_FORCE_TEST)
+        target_compile_definitions(ds5-bridge PRIVATE WOL_FORCE_TEST)
+        message(STATUS "WOL_FORCE_TEST actiu: el WoL es disparara sempre (mode prova)")
+    endif()
+    if (WOL_UDP_LOG)
+        target_compile_definitions(ds5-bridge PRIVATE WOL_UDP_LOG)
+        message(STATUS "WOL_UDP_LOG actiu: logs per UDP broadcast i WiFi es mante amunt (mode diagnostic)")
+    endif()
+    target_sources(ds5-bridge PRIVATE
+            src/wol.cpp
+    )
+endif()
+
 set(VERSION "dev" CACHE STRING "Program version string")
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
@@ -336,13 +374,20 @@ target_link_libraries(ds5-bridge
         hardware_flash
         pico_btstack_classic
 #        pico_cyw43_arch_threadsafe_background
-        pico_cyw43_arch_poll
         pico_btstack_cyw43
         tinyusb_device
         tinyusb_board
         wdl_resampler
         opus
 )
+
+# El xip CYW43 fa BT i WiFi alhora. Sense WoL només cal el BT (arch "none" en
+# mode poll). Amb WoL cal la pila lwIP per enviar el magic packet UDP.
+if (ENABLE_WOL)
+        target_link_libraries(ds5-bridge pico_cyw43_arch_lwip_poll)
+else ()
+        target_link_libraries(ds5-bridge pico_cyw43_arch_poll)
+endif ()
 
 pico_add_extra_outputs(ds5-bridge)
 
