@@ -142,6 +142,10 @@ void start_connect() {
     if (cyw43_arch_wifi_connect_async(WIFI_SSID, WIFI_PASS, CYW43_AUTH_WPA2_AES_PSK) != 0) {
         printf("[WoL] connect_async could not be started\n");
         cyw43_arch_disable_sta_mode();
+        // Could not even start associating: no magic packet will be sent, so release
+        // the power-off suppression armed on connect (otherwise the controller would
+        // be held powered for the whole 180 s window with no host coming up).
+        wake_cancel_poweroff_suppress();
         state = State::Idle;
         return;
     }
@@ -210,6 +214,7 @@ void wol_request() {
     }
     last_attempt = get_absolute_time();
     retries = 0;
+    packets_sent = 0;
     observe_since = get_absolute_time();
     state = State::Observe;
     // The controller just connected and we may wake the PC: prevent the
@@ -319,6 +324,14 @@ void wol_tick() {
         case State::Cleanup:
             printf("[WoL] Bringing the WiFi down\n");
             cyw43_arch_disable_sta_mode();
+            // Cleanup is reached both after a successful send (packets_sent > 0) and
+            // after an aborted attempt that never sent one (BADAUTH, connect timeout,
+            // retries exhausted). Only on the latter do we release the power-off
+            // suppression armed on connect -- on the success path it must stay armed
+            // to carry the controller through the PC's boot.
+            if (packets_sent == 0) {
+                wake_cancel_poweroff_suppress();
+            }
             state = State::Idle;
             return;
     }
