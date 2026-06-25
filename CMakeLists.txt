@@ -24,7 +24,7 @@ if (EXISTS ${picoVscode})
 endif ()
 # ====================================================================================
 
-option(PICO_W_BUILD "Build for Rasberry Pi Pico W, audio is missing" OFF)
+option(PICO_W_BUILD "Build for Raspberry Pi Pico W, audio is missing" OFF)
 option(WAVESHARE_RP2350B_PLUS_W_BUILD "Build for Waveshare RP2350B-Plus-W (USB-C, 16MB flash, RM2 wireless)" OFF)
 
 if (PICO_W_BUILD AND WAVESHARE_RP2350B_PLUS_W_BUILD)

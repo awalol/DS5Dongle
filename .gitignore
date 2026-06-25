@@ -8,12 +8,9 @@ example
 .cache
 /tools/__pycache__
 
-# Logs de diagnostic generats en proves (WoL/serial)
+# Diagnostic logs produced during testing (WoL/serial)
 *.log
 
-# Credencials locals del WoL (WiFi/MAC) — no s'han de pujar mai.
-# Conte la contrasenya del WiFi; usa secrets.h.example com a plantilla.
+# Local WoL credentials (WiFi/MAC) - never commit these.
+# Contains the WiFi password; use secrets.h.example as the template.
 src/secrets.h
-
-# Catalan copies of the docs (personal use, not part of the repo)
-docs-ca/
