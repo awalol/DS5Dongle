@@ -100,6 +100,14 @@ jobs:
                   "artifact": "ds5-bridge-debug",
                   "upload_artifact": True,
               },
+              {
+                  "id": "wol",
+                  "name": "Wake-on-LAN compile check",
+                  "build_dir": "wol",
+                  "cmake_args": "-DENABLE_WOL=ON",
+                  "artifact": "",
+                  "upload_artifact": False,
+              },
           ]
 
           if os.environ["INPUT_PICOW"] == "true":

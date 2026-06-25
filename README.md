@@ -270,9 +270,10 @@ second press. Once the host is up, Wi-Fi is brought back down. This complements
 [Wake-on-PS](#wake-on-ps-optional), which covers **S3 sleep** over USB remote wakeup; this covers
 a **fully-off** machine over the network.
 
-It is built behind `ENABLE_WOL` (ON by default for the Pico 2 W / Waveshare builds; skipped on
-the Pico W, which has no RAM headroom and no audio). The Wi-Fi credentials and target MAC live in
-a git-ignored `src/secrets.h`:
+It is built behind `ENABLE_WOL`, which is **off by default** — enable it with `-DENABLE_WOL=ON`
+(so the stock build stays identical to upstream). On the Pico W (RP2040, 264 KB RAM, no audio) the
+feature still builds, but it is RAM-tight: CMake warns and skips the Opus RAM relocation (Opus
+stays in flash). The Wi-Fi credentials and target MAC live in a git-ignored `src/secrets.h`:
 
 ```sh
 cp src/secrets.h.example src/secrets.h     # then edit src/secrets.h
@@ -285,7 +286,7 @@ cp src/secrets.h.example src/secrets.h     # then edit src/secrets.h
 #define WOL_PORT        9
 ```
 
-Then build normally (e.g. `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPICO_SDK_PATH=<sdk>`).
+Then build with WoL enabled (e.g. `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_WOL=ON -DPICO_SDK_PATH=<sdk>`).
 
 Requirements: the Pico must stay powered while the PC is off (always-on/standby USB port or a
 powered hub), the PC's adapter must have Wake-on-LAN enabled in BIOS/UEFI and the OS, and the Pico

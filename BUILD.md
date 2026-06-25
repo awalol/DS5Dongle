@@ -75,7 +75,7 @@ Output: **`build\ds5-bridge.uf2`**.
 
 | Option | Default | Effect |
 |-------|---------|--------|
-| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus CELT encode+decode relocated to RAM** (selective, ~104 KB → clean audio, ~260 KB heap free) |
+| `ENABLE_WOL` | **OFF** | Wake-on-LAN (opt-in: `-DENABLE_WOL=ON`); lwIP; **Opus CELT encode+decode relocated to RAM** (selective, ~104 KB → clean audio, ~260 KB heap free) |
 | `ENABLE_SERIAL` | OFF | USB CDC console for `printf` (changes the USB descriptor; disables the watchdog) |
 | `ENABLE_VERBOSE` | OFF | Detailed BTstack logs |
 | `ENABLE_BATT_LED` | ON | Low-battery LED |

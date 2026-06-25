@@ -76,7 +76,7 @@ if (DISABLE_SPEAKER_PROC)
 else ()
         set(DISABLE_SPEAKER_PROC_VALUE 0)
 endif ()
-option(ENABLE_WOL "Send a Wake-on-LAN magic packet over WiFi when the controller connects" ON)
+option(ENABLE_WOL "Send a Wake-on-LAN magic packet over WiFi when the controller connects (opt-in; off by default so the stock build matches upstream)" OFF)
 if (ENABLE_WOL)
         set(CYW43_LWIP_VALUE 1)
 else ()
@@ -197,7 +197,7 @@ else ()
     # 48 kHz fullband 10 ms (SILK cannot represent 48 kHz fullband -- verified). So
     # every silk_* TU is never executed on the audio path and stays in flash.
     # This kills the per-frame XIP-miss stalls on core1's encode (speaker/haptics)
-    # AND decode (mic) loops -- audio perfect both ways -- while leaving ~259 KB free
+    # AND decode (mic) loops -- audio perfect both ways -- while leaving ~260 KB free
     # heap, still >100 KB above the level that OOM'd during BT pairing when the WHOLE
     # archive was relocated to RAM. The per-frame table .rodata stays in flash
     # (a possible future step). Only .text is renamed here.
