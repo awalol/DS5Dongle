@@ -232,10 +232,14 @@ Additional changes in this fork:
   flash.
 - **Pico W (RP2040)** — the Opus relocation is skipped there: that board has only 264 KB of
   RAM and audio is disabled on it, so Opus stays in flash.
+- **No idle coil whine** — the on-board SMPS is forced into continuous PWM mode at startup
+  (`CYW43_WL_GPIO_SMPS_PIN` high), instead of light-load PFM which can pulse-skip into the
+  audible band and make the regulator's inductor whine. It costs a little light-load
+  efficiency (irrelevant on USB power) and touches only the dedicated SMPS-mode pin.
 
 The net effect on day-to-day use is that controller **speaker, 3.5 mm output, haptics, and
-microphone are clean** at the stock clock, with Wake-on-LAN available and no memory
-pressure.
+microphone are clean** at the stock clock, with Wake-on-LAN available, no memory pressure,
+and no audible regulator whine at idle.
 
 ## Known Issues
 

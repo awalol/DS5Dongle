@@ -143,6 +143,25 @@ works as usual.
   the power-off re-enables after the timeout (battery saving intact). The S3 suspend behavior
   (power off after 3 s + wake on PS) is **unchanged**.
 
+### 3.5 SMPS coil whine at idle *(2026-06-25)*
+
+- **Symptom:** an audible high-pitched whine from the **board itself** (no controller
+  connected, any USB cable, stops the instant it is unplugged). Not a piezo — the firmware
+  drives no buzzer; it is the on-board buck-boost regulator's inductor.
+- **Cause:** at light load the RT6154 SMPS runs in PFM (power-save) mode and pulse-skips at
+  a rate that can fall into the audible band.
+- **Fix:** force the regulator into continuous PWM mode at startup. On the Pico 2 W the
+  SMPS power-save select is **`WL_GPIO1`** on the CYW43 (`CYW43_WL_GPIO_SMPS_PIN`, *not*
+  GPIO23 as on the non-wireless board), so [main.cpp](src/main.cpp) adds, right after
+  `cyw43_arch_init()`: `cyw43_arch_gpio_put(CYW43_WL_GPIO_SMPS_PIN, true);` (guarded by
+  `#ifdef`, so it is a no-op on boards that don't define the pin). It touches only the
+  dedicated SMPS-mode pin — no feature/RF/USB/audio path — and only costs a little
+  light-load efficiency (irrelevant on USB power). **Validated by ear on hardware.**
+- **Considered and rejected** (would break validated features): sleeping/`__wfe` in the
+  core0 or core1 loops (in NO_SYS poll mode `cyw43_arch_poll()` is the sole pump for BT +
+  lwIP, and core1 is the latency-critical audio loop), lengthening the BT page-scan
+  interval (slows reconnect), and changing the clock/voltage.
+
 ---
 
 ## 4. Build options (CMake)

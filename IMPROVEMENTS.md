@@ -47,6 +47,18 @@ gated behind `ENABLE_WOL` in [CMakeLists.txt](CMakeLists.txt). Free heap is ~276
 
 ---
 
+## P1b — ✅ DONE: silence the idle SMPS coil whine (force PWM)
+
+Fixed in the 2026-06-25 build. At idle the on-board RT6154 SMPS ran in light-load PFM
+mode and its inductor whined audibly. [main.cpp](src/main.cpp) now forces continuous PWM
+mode at startup via `cyw43_arch_gpio_put(CYW43_WL_GPIO_SMPS_PIN, true)` (the SMPS power-save
+select is `WL_GPIO1` on the Pico 2 W). One line, `#ifdef`-guarded, touches only the
+dedicated SMPS pin — no feature/RF/USB/audio risk. Validated by ear. The other options
+(idling the cores, retuning the BT scan, changing clock/voltage) were rejected because they
+would regress the validated BT/WoL/audio timing. See [CONTEXT.md](CONTEXT.md) §3.5.
+
+---
+
 ## P2 — Reclaim the core1 stack (32 KB) — **the largest remaining RAM win**
 
 `audio_core1_stack` is **32 KB** (`uint32_t[8192]` in [audio.cpp](src/audio.cpp)),
