@@ -206,15 +206,16 @@ else ()
     # mdct, bands, etc. -- is already shared with the encode set above).
     # Names are EXTENSIONLESS: the script resolves <base>.o (Linux) or <base>.obj
     # (Windows/Ninja) from the actual archive contents.
-    # Derive the RAW binutils ar from CMAKE_OBJCOPY's path (NOT gcc-ar, which would
-    # load the LTO plugin).
-    string(REPLACE "objcopy" "ar" OPUS_RELOC_AR "${CMAKE_OBJCOPY}")
+    # Use the toolchain's archiver (CMAKE_AR) -- portable across toolchain layouts.
+    # It is the binutils ar here (arm-none-eabi-ar); even if a setup resolved it to
+    # gcc-ar, that is fine because IPO/LTO is rejected above, so there are no LTO
+    # objects for the plugin to choke on.
     set(OPUS_RAM_MEMBERS
         "celt_encoder.c|opus_encoder.c|bands.c|quant_bands.c|rate.c|vq.c|pitch.c|opus.c|kiss_fft.c|entenc.c|celt_lpc.c|cwrs.c|mdct.c|laplace.c|celt.c|mathops.c|modes.c|entcode.c|celt_decoder.c|opus_decoder.c|entdec.c")
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
         COMMAND ${CMAKE_COMMAND}
-            "-DAR=${OPUS_RELOC_AR}"
+            "-DAR=${CMAKE_AR}"
             "-DOBJCOPY=${CMAKE_OBJCOPY}"
             "-DARCHIVE=$<TARGET_FILE:opus>"
             "-DMEMBERS=${OPUS_RAM_MEMBERS}"
