@@ -280,6 +280,17 @@ int main() {
     }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
 
+#ifdef CYW43_WL_GPIO_SMPS_PIN
+    // Force the on-board SMPS into continuous PWM mode instead of light-load PFM.
+    // At light load the regulator pulse-skips, and the repetition rate can fall
+    // into the audible band, making the buck inductor whine. Driving the SMPS
+    // power-save select (WL_GPIO1 on the Pico 2 W / Pico W -- a dedicated CYW43
+    // GPIO, not used by anything else) high selects forced PWM, trading a little
+    // light-load efficiency (irrelevant on USB power) for a quiet, low-ripple rail.
+    // Set once at startup. No-op on boards that do not define the pin (e.g. Waveshare).
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_SMPS_PIN, true);
+#endif
+
 #if ENABLE_BATT_LED
     battery_led_init();
 #endif
