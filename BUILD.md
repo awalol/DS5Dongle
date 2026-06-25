@@ -1,6 +1,7 @@
 # Build and Flash — DS5Dongle v0.7.2-hotfix (+ Wake-on-LAN)
 
-For how the firmware works and the fixes it carries, see [CONTEXT.md](CONTEXT.md). For pending improvements, see [IMPROVEMENTS.md](IMPROVEMENTS.md).
+A Windows-focused build & diagnostics guide. For the Wake-on-LAN feature and its
+`secrets.h` setup, see the README.
 
 > **Tested environment (Windows 11):** the VS Code **Raspberry Pi Pico** extension, which installs everything under `~/.pico-sdk`. SDK **2.2.0**, TinyUSB **0.20.0**, ARM GCC **14.2.Rel1**, CMake 3.31.5, Ninja 1.12.1.
 
@@ -74,7 +75,7 @@ Output: **`build\ds5-bridge.uf2`**.
 
 | Option | Default | Effect |
 |-------|---------|--------|
-| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus CELT-encode relocated to RAM** (selective, ~87 KB → clean audio, ~276 KB heap free). See CONTEXT.md §3.4 |
+| `ENABLE_WOL` | **ON** | Wake-on-LAN; lwIP; **Opus CELT encode+decode relocated to RAM** (selective, ~104 KB → clean audio, ~260 KB heap free) |
 | `ENABLE_SERIAL` | OFF | USB CDC console for `printf` (changes the USB descriptor; disables the watchdog) |
 | `ENABLE_VERBOSE` | OFF | Detailed BTstack logs |
 | `ENABLE_BATT_LED` | ON | Low-battery LED |
@@ -154,7 +155,7 @@ while($true){ $p.ReadExisting() }
 
 | Symptom | Cause | Fix |
 |----------|-------|---------|
-| `*** PANIC *** Out of memory` / hangs while pairing | **All** of Opus in RAM + lwIP → heap exhausted | With `ENABLE_WOL=ON` only the CELT-encode path is relocated (~87 KB, ~276 KB heap free). If it returns, do a **clean build** and check that no extra TUs/`.rodata` have been added to the relocation (CONTEXT.md §3.4, IMPROVEMENTS.md P3) |
+| `*** PANIC *** Out of memory` / hangs while pairing | **All** of Opus in RAM + lwIP → heap exhausted | With `ENABLE_WOL=ON` only the CELT encode+decode path is relocated (~104 KB, ~260 KB heap free). If it returns, do a **clean build** and check that no extra TUs/`.rodata` have been added to the relocation member list in `CMakeLists.txt` |
 | CMake: "unable to find a build program / Ninja" | Tools not on PATH | Put cmake/ninja/toolchain on PATH (§0) |
 | `cd : cannot find ...\.pico-sdk\...` | `$USERPROFILE` instead of `$env:USERPROFILE` | Use `$env:USERPROFILE` in PowerShell |
 | USB/audio errors | TinyUSB ≠ 0.20.0 | §1 |

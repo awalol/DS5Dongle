@@ -200,7 +200,7 @@ else ()
     # AND decode (mic) loops -- audio perfect both ways -- while leaving ~259 KB free
     # heap, still >100 KB above the level that OOM'd during BT pairing when the WHOLE
     # archive was relocated to RAM. The per-frame table .rodata stays in flash
-    # (optional future step; see IMPROVEMENTS.md). Only .text is renamed here.
+    # (a possible future step). Only .text is renamed here.
     # First 18 members = CELT encode set; last 3 = incremental CELT decode set
     # (celt_decoder + opus_decoder + entdec; the rest of the decode path -- kiss_fft,
     # mdct, bands, etc. -- is already shared with the encode set above).
