@@ -244,6 +244,10 @@ void wol_tick() {
             //   - PC off S5 (standby)    -> stays suspended/unmounted -> fire WoL
             if (tud_mounted() && !tud_suspended()) {
                 printf("[WoL] USB host active (PC on): WoL aborted\n");
+                // No wake is being sent, so release the power-off suppression armed
+                // on connect -- otherwise a later genuine sleep within the window
+                // would skip the controller's battery power-off.
+                wake_cancel_poweroff_suppress();
                 state = State::Idle;
                 return;
             }

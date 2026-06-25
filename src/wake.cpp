@@ -137,6 +137,13 @@ void wake_suppress_poweroff(uint64_t duration_us) {
     suspend_at_us = 0;   // cancel any power-off about to fire
 }
 
+// Disarm the suppression armed by wake_suppress_poweroff(). Used when the WoL
+// observation decides the PC is already on, so the suppression armed on connect
+// does not outlive the (never sent) wake and block a later genuine power-off.
+void wake_cancel_poweroff_suppress(void) {
+    poweroff_suppress_until_us = 0;
+}
+
 extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     WAKE_DBG("tud_suspend_cb remote_wakeup_en=%d prev_state=%s",
              (int)remote_wakeup_en, wake_state_name(state));
