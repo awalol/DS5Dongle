@@ -874,26 +874,34 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     return ret;
 }
 
-void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
-    if (hid_control_cid != 0) {
-        uint8_t get_feature[len + 2];
-        get_feature[0] = 0x53;
-        get_feature[1] = reportId;
-        memcpy(get_feature + 2, data, len);
-        fill_feature_report_checksum(get_feature + 1, len + 1);
-        l2cap_send(hid_control_cid, get_feature, len + 2);
-#if ENABLE_VERBOSE
-        printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
-        printf_hexdump(get_feature, len + 2);
-#endif
-        dse_on_profile_write(reportId);
+bool set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
+    if (hid_control_cid == 0) {
+        return false;
     }
+    uint8_t get_feature[len + 2];
+    get_feature[0] = 0x53;
+    get_feature[1] = reportId;
+    memcpy(get_feature + 2, data, len);
+    fill_feature_report_checksum(get_feature + 1, len + 1);
+    // l2cap_send does NOT queue: it returns BTSTACK_ACL_BUFFERS_FULL and drops
+    // the packet when the single outgoing ACL buffer is busy (e.g. the interrupt
+    // channel still draining rumble/audio). Report that to the caller.
+    const uint8_t status = l2cap_send(hid_control_cid, get_feature, len + 2);
+#if ENABLE_VERBOSE
+    printf("[L2CAP] Requesting Set Feature Report 0x%02X (status=%d)\n", reportId, status);
+    printf_hexdump(get_feature, len + 2);
+#endif
+    dse_on_profile_write(reportId);
+    return status == ERROR_CODE_SUCCESS;
 }
 
-void bt_power_off_controller() {
+bool bt_power_off_controller() {
+    if (hid_control_cid == 0) {
+        return true; // no controller connected: nothing to power off
+    }
     uint8_t bluetooth_control[47]{};
     bluetooth_control[0] = 0x02; // DualSense Bluetooth control: 1=on, 2=off.
-    set_feature_data(0x08, bluetooth_control, sizeof(bluetooth_control));
+    return set_feature_data(0x08, bluetooth_control, sizeof(bluetooth_control));
 }
 
 void init_feature() {
