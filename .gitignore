@@ -1,4 +1,5 @@
 build
+build-*/
 .deps
 .vscode
 .idea
@@ -6,3 +7,10 @@ example
 .DS_Store
 .cache
 /tools/__pycache__
+
+# Diagnostic logs produced during testing (WoL/serial)
+*.log
+
+# Local WoL credentials (WiFi/MAC) - never commit these.
+# Contains the WiFi password; use secrets.h.example as the template.
+src/secrets.h

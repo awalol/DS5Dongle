@@ -34,8 +34,14 @@
 #define HAVE_EMBEDDED_TIME_MS
 
 // Logging
+// Release perf: ENABLE_LOG_INFO dropped -- it pulled btstack's internal per-event
+// log_info() strings + formatting (flash/XIP pressure + CPU on the BT event path)
+// that the release never needs. ENABLE_LOG_ERROR kept so genuine error paths still
+// report. ENABLE_PRINTF_HEXDUMP MUST stay: the Pico SDK unconditionally compiles
+// btstack's hci_dump_embedded_stdout.c, which has a hard #error without it. It
+// costs nothing in the shipped binary -- hci_dump is never initialized so that
+// code (and printf_hexdump, only called under ENABLE_VERBOSE=OFF) is gc-collected.
 #define ENABLE_PRINTF_HEXDUMP
-#define ENABLE_LOG_INFO
 #define ENABLE_LOG_ERROR
 
 #endif

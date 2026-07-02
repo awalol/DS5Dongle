@@ -14,9 +14,20 @@
     downloaded.
 
 .PARAMETER Variant
-    standard (default) - normal firmware.
+    standard (default) - normal firmware (Wake-on-PS is included and toggled at
+                         runtime via the web config; no separate build needed).
     debug              - adds -DENABLE_SERIAL=ON -DENABLE_VERBOSE=ON.
-    wake               - adds -DENABLE_WAKE_HID=ON (Wake-on-PS build).
+    wol                - adds -DENABLE_WOL=ON (Wake-on-LAN build). Requires a
+                         filled-in secrets.h: either src\secrets.h in the
+                         checkout, or a secrets.h placed next to this script
+                         (it is copied into the checkout). See
+                         src\secrets.h.example.
+
+.PARAMETER WolAlways
+    With -Variant wol: also pass -DWOL_ALWAYS=ON, skipping the PC-powered-on
+    gate. Use this when your motherboard keeps USB powered AND active while
+    the PC is off (S5 "power on by USB keyboard" ports, Modern Standby), where
+    the gate would wrongly conclude the PC is on and abort every wake.
 
 .PARAMETER Clean
     Delete the variant's build directory before configuring.
@@ -36,8 +47,8 @@
     powershell -ExecutionPolicy Bypass -File .\build-windows.ps1
 
 .EXAMPLE
-    # From inside a cloned repo:
-    powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1 -Variant wake
+    # Wake-on-LAN build (put your filled-in secrets.h next to the script first):
+    powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1 -Variant wol
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\build-windows.ps1 -Repo https://github.com/youruser/DS5Dongle.git -Ref master
@@ -45,8 +56,10 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('standard', 'debug', 'wake')]
+    [ValidateSet('standard', 'debug', 'wol')]
     [string]$Variant = 'standard',
+    # With -Variant wol: skip the PC-powered-on gate (see .PARAMETER WolAlways).
+    [switch]$WolAlways,
     [switch]$Clean,
     # Project to build when this script is run standalone (not from inside a
     # checkout). Override to build a fork.
@@ -59,7 +72,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 # Bump on every change so a stale download is obvious in the banner.
-$SCRIPT_REV   = '2026-05-16.7'
+$SCRIPT_REV   = '2026-07-02.1'
 
 # --- Pinned versions: keep in sync with .github/workflows/build-firmware.yml ---
 $PICO_SDK_REF = '2.2.0'
@@ -464,7 +477,24 @@ $cmakeArgs = @(
 )
 switch ($Variant) {
     'debug' { $cmakeArgs += @('-DENABLE_SERIAL=ON', '-DENABLE_VERBOSE=ON') }
-    'wake'  { $cmakeArgs += @('-DENABLE_WAKE_HID=ON') }
+    'wol'   {
+        # Wake-on-LAN needs real credentials compiled in. Accept a secrets.h
+        # next to this script (copied into the checkout) or one already in the
+        # checkout; refuse to build a placeholder-credentials WoL firmware.
+        $repoSecrets   = Join-Path $RepoRoot 'src\secrets.h'
+        $scriptSecrets = Join-Path $PSScriptRoot 'secrets.h'
+        if ((Test-Path $scriptSecrets)) {
+            Copy-Item $scriptSecrets $repoSecrets -Force
+            Info "Using secrets.h found next to the script (copied to src\secrets.h)."
+        }
+        if (-not (Test-Path $repoSecrets)) {
+            Die ("-Variant wol needs your WiFi credentials: copy src\secrets.h.example " +
+                 "to src\secrets.h (or place a filled-in secrets.h next to this script) " +
+                 "and edit it. It is git-ignored and never uploaded.")
+        }
+        $cmakeArgs += '-DENABLE_WOL=ON'
+        if ($WolAlways) { $cmakeArgs += '-DWOL_ALWAYS=ON' }
+    }
 }
 
 Info "Configuring: cmake $($cmakeArgs -join ' ')"

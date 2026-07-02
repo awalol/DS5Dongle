@@ -5,6 +5,7 @@
 #include "config.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "state_mgr.h"

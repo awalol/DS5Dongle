@@ -34,6 +34,18 @@
 #define WAKE_RECONNECT_GRACE_US   5000000  // 5s: after a deliberate USB reconnect, ignore the
                                            // suspend it causes (it is not a host sleep).
                                            // Cleared early when the device re-mounts.
+#define WAKE_BOOT_GRACE_US       90000000  // 90s after every USB mount: a cold boot goes
+                                           // BIOS-enumerate -> bus reset -> OS-enumerate, and
+                                           // the BIOS->OS handoff can leave the bus suspended
+                                           // for several seconds. Without this grace, powering
+                                           // the PC on by its button with the controller
+                                           // already connected powers the controller off
+                                           // mid-boot (the 3s debounce fires during the
+                                           // handoff). Re-armed on each mount, so it covers
+                                           // both enumerations; it merely defers (not skips)
+                                           // the battery power-off if the host really sleeps.
+#define WAKE_POWEROFF_RETRY_US     100000  // 100ms between power-off send retries when the
+                                           // ACL buffer was busy and l2cap dropped the send.
 
 #ifdef WAKE_DEBUG
 #  define WAKE_DBG(fmt, ...) printf("[wake] " fmt "\n", ##__VA_ARGS__)
@@ -76,6 +88,13 @@ static uint8_t prev_b9 = 0x00;
 static volatile uint64_t suspend_at_us = 0;
 // During a deliberate USB reconnect, ignore the suspend it triggers until this time.
 static volatile uint64_t reconnect_until_us = 0;
+// While set (future timestamp), the sustained-suspend controller power-off is
+// suppressed. Armed by the WoL path while the host boots after a magic packet.
+static volatile uint64_t poweroff_suppress_until_us = 0;
+// Boot grace: armed on every USB mount, never cancelled (only expires). Kept
+// separate from poweroff_suppress_until_us so a WoL abort's cancel cannot wipe
+// the protection covering a BIOS->OS handoff suspend.
+static volatile uint64_t boot_grace_until_us = 0;
 
 static void enter_state(wake_state_t s) {
     state = s;
@@ -122,6 +141,29 @@ void wake_init(void) {
 void wake_note_usb_reconnect(void) {
     reconnect_until_us = time_us_64() + WAKE_RECONNECT_GRACE_US;
     suspend_at_us = 0;
+}
+
+// Called by the WoL path when a magic packet is sent: while the woken host
+// boots, its USB stays suspended for many seconds. Without this the sustained-
+// suspend debounce would power the controller off mid-boot, forcing a second PS
+// press. Suppress that power-off for 'duration_us'.
+//
+// Deliberately does NOT clear suspend_at_us: the suppression check in
+// wake_task() already defers a pending power-off, and keeping the pending
+// timestamp is what makes the power-off actually fire once the window expires
+// with the host still down (WoL failed / PC never came up). Clearing it here
+// left the controller powered forever in that case, because only a fresh
+// suspend edge (tud_suspend_cb) re-arms it and a dead bus never resumes.
+void wake_suppress_poweroff(uint64_t duration_us) {
+    const uint64_t until = time_us_64() + duration_us;
+    if (until > poweroff_suppress_until_us) poweroff_suppress_until_us = until;
+}
+
+// Disarm the suppression armed by wake_suppress_poweroff(). Used when the WoL
+// observation decides the PC is already on, so the suppression armed on connect
+// does not outlive the (never sent) wake and block a later genuine power-off.
+void wake_cancel_poweroff_suppress(void) {
+    poweroff_suppress_until_us = 0;
 }
 
 extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
@@ -180,6 +222,10 @@ extern "C" void tud_mount_cb(void) {
     host_resumed_event = true;
     suspend_at_us = 0;
     reconnect_until_us = 0;   // reconnect finished re-enumerating; end the grace early
+    // The host just enumerated us. During a cold boot that happens twice (BIOS,
+    // then OS) with suspended gaps in between; hold the power-off long enough to
+    // ride those out. See WAKE_BOOT_GRACE_US.
+    boot_grace_until_us = time_us_64() + WAKE_BOOT_GRACE_US;
 }
 
 void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {
@@ -237,9 +283,29 @@ void wake_task(void) {
     // been cancelled by tud_resume_cb / tud_mount_cb before this fires.
     if (suspend_at_us != 0 && host_suspended &&
         now - suspend_at_us >= WAKE_POWEROFF_DEBOUNCE_US) {
-        bt_power_off_controller();
-        suspend_at_us = 0;
-        WAKE_DBG("suspend debounce elapsed -> bt_power_off_controller()");
+        if (now < poweroff_suppress_until_us || now < boot_grace_until_us) {
+            // WoL-initiated boot (or a fresh enumeration's boot grace) in
+            // progress: keep the controller powered so it stays connected
+            // through the host boot (no second PS press). suspend_at_us stays
+            // pending, so the power-off fires right here once the window
+            // expires with the host still down.
+            WAKE_DBG("suspend debounce elapsed but power-off suppressed (boot window)");
+        } else {
+            // The send can be dropped by l2cap when the ACL buffer is busy
+            // (rumble/audio still draining at the moment the host slept).
+            // Only consider the power-off done when it was actually queued;
+            // otherwise keep suspend_at_us pending and retry shortly.
+            static uint64_t last_poweroff_try_us = 0;
+            if (now - last_poweroff_try_us >= WAKE_POWEROFF_RETRY_US) {
+                last_poweroff_try_us = now;
+                if (bt_power_off_controller()) {
+                    suspend_at_us = 0;
+                    WAKE_DBG("suspend debounce elapsed -> bt_power_off_controller()");
+                } else {
+                    WAKE_DBG("power-off send dropped (ACL busy); retrying");
+                }
+            }
+        }
     }
 
     // The wake-UP FSM below only runs when wake is enabled.

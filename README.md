@@ -18,6 +18,7 @@ This project enables the Raspberry Pi Pico2W (or other compatible board, e.g. th
 - 🎧 Headset audio output — controller speaker and 3.5 mm jack
 - 🎤 Headset microphone input — the controller mic is exposed as a USB audio input device
 - 📡 Wireless Bluetooth bridging
+- 🌐 Optional Wake-on-LAN — wake a powered-off PC over Wi-Fi from the controller (see [Wake-on-LAN](#wake-on-lan-optional))
 - 🔘 BOOTSEL-button controller management — pair, reboot, enter BOOTSEL for flashing, or forget all pairings without unplugging
 - ⚡ Runs at the stock 150 MHz clock — no overclock required
 
@@ -179,6 +180,23 @@ core-voltage bump.**
 > If you build for a different board and it fails to boot, reduce the CPU
 > frequency (and/or raise the voltage) in `CMakeLists.txt`.
 
+### Keeping that with Wake-on-LAN
+
+`ENABLE_WOL` brings in the lwIP network stack, which shares the heap with the codec.
+Relocating the whole `libopus` archive to RAM (the stock behaviour) plus lwIP exhausts
+the allocator during Bluetooth pairing. Since both audio directions run Opus in
+`OPUS_APPLICATION_RESTRICTED_LOWDELAY` (CELT-only — SILK never runs on the audio path),
+the WoL build relocates only the CELT encode+decode translation units (~104 KB of
+`.text`) instead of the full ~241 KB, via per-member archive surgery
+(`cmake/relocate_archive_members.cmake`). Audio stays RAM-resident and glitch-free at
+150 MHz while leaving ample free heap, so Wi-Fi/lwIP coexists with the BT stack. The
+btstack↔CYW43 HCI transport bridge is also moved to RAM, and a configure-time guard
+rejects IPO/LTO (which would silently leave the relocated hot paths in flash).
+
+The on-board SMPS is forced into continuous PWM mode at startup
+(`CYW43_WL_GPIO_SMPS_PIN`) so the regulator's inductor does not whine at light load; it
+touches only the dedicated SMPS-mode pin and costs only a little light-load efficiency.
+
 ## Build Instructions
 
 ### Windows 11 (one command, no WSL)
@@ -241,6 +259,57 @@ keyboard shortcuts, sent over the same HID keyboard interface used by [Wake-on-P
 
 The toggle is off by default, and the keyboard interface is only enumerated while it (or wake) is enabled. 
 > If the Game Bar overlay opens but does not respond to controller inputs, Windows may be missing the modern input stack. Installing or updating **Microsoft GameInput** will resolve this and restore controller navigation. You can install the service directly by opening an elevated command prompt and running `winget install Microsoft.GameInput`, or read the [official documentation](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/input/overviews/input-overview) for more details.
+
+## Wake-on-LAN (optional)
+
+With the PC **fully powered off (S5)** but the Pico still powered (an always-on USB port or a
+powered hub/extender), a single press of the controller's PS button wakes it: the controller
+connects to the dongle, the dongle brings up Wi-Fi and sends a Wake-on-LAN magic packet to the
+PC's MAC, the PC powers on, and the controller stays connected through the whole boot — no
+second press. Once the host is up, Wi-Fi is brought back down. This complements
+[Wake-on-PS](#wake-on-ps-optional), which covers **S3 sleep** over USB remote wakeup; this covers
+a **fully-off** machine over the network.
+
+It is built behind `ENABLE_WOL`, which is **off by default** — enable it with `-DENABLE_WOL=ON`
+(so the stock build stays identical to upstream). On the Pico W (RP2040, 264 KB RAM, no audio) the
+feature still builds, but it is RAM-tight: CMake warns and skips the Opus RAM relocation (Opus
+stays in flash). The Wi-Fi credentials and target MAC live in a git-ignored `src/secrets.h`:
+
+```sh
+cp src/secrets.h.example src/secrets.h     # then edit src/secrets.h
+```
+
+```c
+#define WIFI_SSID       "YOUR_SSID"
+#define WIFI_PASS       "YOUR_WIFI_PASSWORD"
+#define WOL_TARGET_MAC  "AA:BB:CC:DD:EE:FF"   // MAC of the PC's WoL-armed adapter
+#define WOL_PORT        9
+```
+
+Then build with WoL enabled (e.g. `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_WOL=ON -DPICO_SDK_PATH=<sdk>`).
+On Windows, `tools/build-windows.ps1 -Variant wol` does all of this in one command (place your
+filled-in `secrets.h` next to the script, or in `src/`, first).
+
+Requirements: the Pico must stay powered while the PC is off (always-on/standby USB port or a
+powered hub), the PC's adapter must have Wake-on-LAN enabled in BIOS/UEFI and the OS, and the Pico
+must be on the **same subnet** as the PC (the magic packet is an L2 broadcast).
+
+### If WoL never fires on your machine: `WOL_ALWAYS`
+
+Before sending the wake, the firmware checks whether the PC already looks *on* (USB mounted and
+the bus active) and aborts if so. That heuristic cannot work on motherboards that keep the USB
+bus powered **and active** while the PC is off — S5 ports with "power on by USB keyboard/mouse",
+always-on charging ports, or Modern Standby (S0ix) machines. On those, the dongle permanently
+sees an "active" host and aborts every wake (the log shows `USB host active (PC on): WoL
+aborted`). Build with **`-DWOL_ALWAYS=ON`** (or `build-windows.ps1 -Variant wol -WolAlways`) to
+skip the gate: the magic packet is then sent on every debounced controller connect, which is
+harmless when the PC is already running.
+
+> **Pre-built firmware cannot include Wake-on-LAN.** The WiFi credentials and target MAC are
+> compiled in from the git-ignored `secrets.h`, so release/CI artifacts are built without a real
+> one — the code falls back to inert placeholders via `__has_include`, and the firmware disables
+> WoL at boot (`[WoL] secrets.h not configured`). To use WoL, build from source with your own
+> `src/secrets.h`. Every other feature works on the pre-built firmware as usual.
 
 ## Wake-on-PS (optional)
 
