@@ -11,7 +11,9 @@
 #ifndef DS5_BRIDGE_WOL_H
 #define DS5_BRIDGE_WOL_H
 
-// Initializes the internal state. Call once, after cyw43_arch_init().
+// Initializes the internal state and validates the secrets.h credentials.
+// With template placeholders (or an unparsable MAC) WoL disables itself for
+// the whole session. Call once, after cyw43_arch_init().
 void wol_init();
 
 // Requests a WoL sequence. Safe to call from the Bluetooth callback context:
