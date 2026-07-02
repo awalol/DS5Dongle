@@ -192,6 +192,23 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
     return true;
 }
 
+static void forward_state_output_report(uint8_t const *state_data, uint16_t state_size) {
+    state_update(state_data, state_size);
+    if (spk_active) {
+        return;
+    }
+
+    uint8_t outputData[78]{};
+    outputData[0] = 0x31;
+    outputData[1] = reportSeqCounter << 4;
+    if (++reportSeqCounter == 256) {
+        reportSeqCounter = 0;
+    }
+    outputData[2] = 0x10;
+    state_set(outputData + 3, sizeof(SetStateData));
+    bt_write(outputData, sizeof(outputData));
+}
+
 // Invoked when received SET_REPORT control request or
 // received data on OUT endpoint ( Report ID = 0, Type = 0 )
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
@@ -203,10 +220,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     }
 #endif
     (void) itf;
-    (void) report_id;
     (void) report_type;
-    (void) buffer;
-    (void) bufsize;
 
     if (is_pico_cmd(report_id)) {
 #if ENABLE_VERBOSE
@@ -216,26 +230,20 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         return;
     }
 
+    if (report_id == 0x02) {
+        const bool has_report_id_prefix = bufsize > 0 && buffer[0] == 0x02;
+        forward_state_output_report(
+            has_report_id_prefix ? buffer + 1 : buffer,
+            has_report_id_prefix ? bufsize - 1 : bufsize
+        );
+        return;
+    }
+
     // INTERRUPT OUT
-    if (report_id == 0) {
+    if (report_id == 0 && bufsize > 0) {
         switch (buffer[0]) {
             case 0x02: {
-                state_update(buffer + 1, bufsize - 1);
-                bool send_now = ((buffer[1] >> 1) & 1) || // UseRumbleNotHaptics
-                                ((buffer[39] >> 3) & 1); // UseRumbleNotHaptics2
-                if (!send_now && spk_active) {
-                    break;
-                }
-                uint8_t outputData[78]{};
-                outputData[0] = 0x31;
-                outputData[1] = reportSeqCounter << 4;
-                if (++reportSeqCounter == 256) {
-                    reportSeqCounter = 0;
-                }
-                outputData[2] = 0x10;
-                // memcpy(outputData + 3, buffer + 1, bufsize - 1);
-                state_set(outputData + 3, sizeof(SetStateData));
-                bt_write(outputData, sizeof(outputData));
+                forward_state_output_report(buffer + 1, bufsize - 1);
                 break;
             }
         }
