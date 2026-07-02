@@ -85,7 +85,6 @@ endif ()
 if (ENABLE_WOL AND PICO_W_BUILD)
         message(WARNING "ENABLE_WOL + PICO_W_BUILD: RAM-tight build on the RP2040 (264KB). Consider reducing PBUF_POOL_SIZE in src/lwipopts.h if the link does not fit.")
 endif ()
-option(PICO_W_BUILD "Build for Raspberry Pi Pico W, audio is missing" OFF)
 if (PICO_W_BUILD)
         set(CYW43_PIO_CLOCK_DIV_VALUE 3)
         set(SYS_CLOCK_KHZ_VALUE 200000)
@@ -172,6 +171,41 @@ add_subdirectory(lib/opus)
 #     relocate ONLY the CELT codec hot path (encode + decode, ~104 KB), which is
 #     all the audio path ever executes; the rest of libopus (SILK, etc.) stays in
 #     flash. Audio is glitch-free and the heap stays large enough to pair safely.
+# Member list for the selective (WoL) strategy. First 18 members = CELT encode
+# set; last 3 = incremental CELT decode set (celt_decoder + opus_decoder + entdec).
+# Names are EXTENSIONLESS: the script resolves <base>.o / <base>.obj from the
+# actual archive contents.
+set(OPUS_RAM_MEMBERS
+    "celt_encoder.c|opus_encoder.c|bands.c|quant_bands.c|rate.c|vq.c|pitch.c|opus.c|kiss_fft.c|entenc.c|celt_lpc.c|cwrs.c|mdct.c|laplace.c|celt.c|mathops.c|modes.c|entcode.c|celt_decoder.c|opus_decoder.c|entdec.c")
+
+# GUARDRAIL: both strategies below mutate libopus.a IN PLACE (objcopy/ar), and
+# objcopy silently no-ops a rename whose section is already gone. Reconfiguring an
+# existing build dir to a different strategy (e.g. ENABLE_WOL OFF -> ON) would
+# therefore link a stale relocation with no error -- the exact heap-exhaustion
+# PANIC during BT pairing the selective strategy exists to avoid. Record the
+# strategy this build dir is committed to and refuse to reconfigure across it.
+if (PICO_W_BUILD)
+    set(OPUS_RELOC_STRATEGY "none")
+elseif (NOT ENABLE_WOL)
+    set(OPUS_RELOC_STRATEGY "whole")
+else ()
+    set(OPUS_RELOC_STRATEGY "selective:${OPUS_RAM_MEMBERS}")
+endif ()
+set(_opus_reloc_marker "${CMAKE_BINARY_DIR}/opus_reloc.strategy")
+if (EXISTS "${_opus_reloc_marker}")
+    file(READ "${_opus_reloc_marker}" _opus_reloc_prev)
+    if (NOT _opus_reloc_prev STREQUAL OPUS_RELOC_STRATEGY)
+        message(FATAL_ERROR
+            "Opus RAM-relocation strategy changed for this build directory:\n"
+            "  was: ${_opus_reloc_prev}\n"
+            "  now: ${OPUS_RELOC_STRATEGY}\n"
+            "libopus.a is mutated in place, so an incremental build would silently "
+            "link the previous relocation. Delete the build directory and reconfigure.")
+    endif ()
+else ()
+    file(WRITE "${_opus_reloc_marker}" "${OPUS_RELOC_STRATEGY}")
+endif ()
+
 if (PICO_W_BUILD)
     # Pico W (RP2040): only 264 KB RAM and audio is disabled there
     # (DISABLE_SPEAKER_PROC=1), so there is neither room nor reason to move Opus to
@@ -201,17 +235,13 @@ else ()
     # heap, still >100 KB above the level that OOM'd during BT pairing when the WHOLE
     # archive was relocated to RAM. The per-frame table .rodata stays in flash
     # (a possible future step). Only .text is renamed here.
-    # First 18 members = CELT encode set; last 3 = incremental CELT decode set
-    # (celt_decoder + opus_decoder + entdec; the rest of the decode path -- kiss_fft,
-    # mdct, bands, etc. -- is already shared with the encode set above).
-    # Names are EXTENSIONLESS: the script resolves <base>.o (Linux) or <base>.obj
-    # (Windows/Ninja) from the actual archive contents.
+    # Member list: OPUS_RAM_MEMBERS, defined above next to the strategy marker
+    # (the rest of the decode path -- kiss_fft, mdct, bands, etc. -- is already
+    # shared with the encode set).
     # Use the toolchain's archiver (CMAKE_AR) -- portable across toolchain layouts.
     # It is the binutils ar here (arm-none-eabi-ar); even if a setup resolved it to
     # gcc-ar, that is fine because IPO/LTO is rejected above, so there are no LTO
     # objects for the plugin to choke on.
-    set(OPUS_RAM_MEMBERS
-        "celt_encoder.c|opus_encoder.c|bands.c|quant_bands.c|rate.c|vq.c|pitch.c|opus.c|kiss_fft.c|entenc.c|celt_lpc.c|cwrs.c|mdct.c|laplace.c|celt.c|mathops.c|modes.c|entcode.c|celt_decoder.c|opus_decoder.c|entdec.c")
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
         COMMAND ${CMAKE_COMMAND}
@@ -397,12 +427,20 @@ if(WAKE_DEBUG)
     )
 endif()
 
+option(WOL_ALWAYS "Always send the WoL magic packet on controller connect, skipping the PC-powered-on gate. For PCs whose USB stays powered AND active while off (S5 'power on by USB keyboard' ports, Modern Standby): there the gate cannot detect 'PC off' and would abort every wake. Harmless when the PC is already on." OFF)
 option(WOL_FORCE_TEST "DEBUG: force WoL on every connection, ignoring the PC-powered-on gating" OFF)
 option(WOL_UDP_LOG "DEBUG: redirect printf to UDP broadcast (logs over WiFi, no UART) and keep WiFi up" OFF)
+if (WOL_ALWAYS AND WOL_FORCE_TEST)
+    message(FATAL_ERROR "WOL_ALWAYS and WOL_FORCE_TEST both skip the PC-on gate; enable only one (WOL_ALWAYS for production, WOL_FORCE_TEST for debugging).")
+endif ()
 if (ENABLE_WOL)
     target_compile_definitions(ds5-bridge PRIVATE
             ENABLE_WOL
     )
+    if (WOL_ALWAYS)
+        target_compile_definitions(ds5-bridge PRIVATE WOL_ALWAYS)
+        message(STATUS "WOL_ALWAYS active: the PC-on gate is skipped; WoL fires on every (debounced) connect")
+    endif()
     if (WOL_FORCE_TEST)
         target_compile_definitions(ds5-bridge PRIVATE WOL_FORCE_TEST)
         message(STATUS "WOL_FORCE_TEST active: WoL will always fire (test mode)")
@@ -457,6 +495,21 @@ if (ENABLE_WOL)
         target_link_libraries(ds5-bridge pico_cyw43_arch_lwip_poll)
 else ()
         target_link_libraries(ds5-bridge pico_cyw43_arch_poll)
+endif ()
+
+# Post-link assertion that the .time_critical relocation landed in SRAM (catches
+# stale in-place libopus.a relocations and toolchain-drifted section names, both
+# of which link fine and silently run the hot paths from flash). Skipped on the
+# Pico W, where Opus deliberately stays in flash.
+if (NOT PICO_W_BUILD)
+    add_custom_command(TARGET ds5-bridge POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            "-DNM=${CMAKE_NM}"
+            "-DELF=$<TARGET_FILE:ds5-bridge>"
+            "-DSYMBOLS=celt_encode_with_ec;opus_decode;tud_task_ext;cyw43_arch_poll;tu_fifo_read"
+            -P "${CMAKE_SOURCE_DIR}/cmake/verify_ram_relocation.cmake"
+        COMMENT "Verifying the RAM relocation of hot-path symbols in the final ELF"
+        VERBATIM)
 endif ()
 
 pico_add_extra_outputs(ds5-bridge)
