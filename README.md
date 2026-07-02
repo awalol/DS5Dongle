@@ -287,15 +287,29 @@ cp src/secrets.h.example src/secrets.h     # then edit src/secrets.h
 ```
 
 Then build with WoL enabled (e.g. `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_WOL=ON -DPICO_SDK_PATH=<sdk>`).
+On Windows, `tools/build-windows.ps1 -Variant wol` does all of this in one command (place your
+filled-in `secrets.h` next to the script, or in `src/`, first).
 
 Requirements: the Pico must stay powered while the PC is off (always-on/standby USB port or a
 powered hub), the PC's adapter must have Wake-on-LAN enabled in BIOS/UEFI and the OS, and the Pico
 must be on the **same subnet** as the PC (the magic packet is an L2 broadcast).
 
-> **Pre-built firmware does not carry your credentials.** `secrets.h` is git-ignored, so builds
-> without it (CI, release artifacts) compile with inert placeholders via `__has_include` and
-> Wake-on-LAN will not wake anything. To use WoL, build from source with your own `src/secrets.h`.
-> Every other feature works on the pre-built firmware as usual.
+### If WoL never fires on your machine: `WOL_ALWAYS`
+
+Before sending the wake, the firmware checks whether the PC already looks *on* (USB mounted and
+the bus active) and aborts if so. That heuristic cannot work on motherboards that keep the USB
+bus powered **and active** while the PC is off — S5 ports with "power on by USB keyboard/mouse",
+always-on charging ports, or Modern Standby (S0ix) machines. On those, the dongle permanently
+sees an "active" host and aborts every wake (the log shows `USB host active (PC on): WoL
+aborted`). Build with **`-DWOL_ALWAYS=ON`** (or `build-windows.ps1 -Variant wol -WolAlways`) to
+skip the gate: the magic packet is then sent on every debounced controller connect, which is
+harmless when the PC is already running.
+
+> **Pre-built firmware cannot include Wake-on-LAN.** The WiFi credentials and target MAC are
+> compiled in from the git-ignored `secrets.h`, so release/CI artifacts are built without a real
+> one — the code falls back to inert placeholders via `__has_include`, and the firmware disables
+> WoL at boot (`[WoL] secrets.h not configured`). To use WoL, build from source with your own
+> `src/secrets.h`. Every other feature works on the pre-built firmware as usual.
 
 ## Wake-on-PS (optional)
 
