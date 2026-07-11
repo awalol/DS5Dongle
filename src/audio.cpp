@@ -286,8 +286,16 @@ void __not_in_flash_func(audio_loop)() {
 }
 
 void audio_init() {
-    resampler.SetMode(true, 2, false);
-    resampler.SetFilterParms(0.85f, 0.707f);
+    resampler.SetMode(true, 0, false);
+    // 在有线连接的 DS5，其内部的 hd 震动也是工作在 3000Hz 的音频
+    // 怎么发现的呢？打开频率发生器，发现在 0-3000 以及 3000-6000
+    // 以及往后相同范围的区域，声音都是先升后降
+    // 因此推断，DS5内部也是 3000Hz 的工作频率，并且没有低通滤波
+    // 但是SetStateData有一个开关？还没进行测试
+    // ------
+    // resampler.SetMode(true, 2, false);
+    // resampler.SetFilterParms(0.85f, 0.707f);
+    // ------
     resampler.SetRates(48000, 3000);
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 48, 4);
