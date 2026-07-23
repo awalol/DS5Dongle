@@ -209,7 +209,7 @@ relocate_to_ram(lib/btstack/src/l2cap.c.o
     ".text.l2cap_acl_handler=.time_critical.l2cap_acl_handler"
     "Phase B.2: l2cap.c l2cap_acl_handler -> RAM")
 relocate_to_ram(lib/tinyusb/src/common/tusb_fifo.c.o
-    ".text.tu_fifo_read=.time_critical.tu_fifo_read|.text.tu_fifo_read_n=.time_critical.tu_fifo_read_n|.text.tu_fifo_write=.time_critical.tu_fifo_write|.text.tu_fifo_write_n=.time_critical.tu_fifo_write_n|.text.tu_fifo_count=.time_critical.tu_fifo_count"
+    ".text.tu_fifo_read=.time_critical.tu_fifo_read|.text.tu_fifo_read_n_access_mode=.time_critical.tu_fifo_read_n_access_mode|.text.tu_fifo_write=.time_critical.tu_fifo_write|.text.tu_fifo_write_n_access_mode=.time_critical.tu_fifo_write_n_access_mode"
     "Phase B.2: tusb_fifo.c data path -> RAM")
 relocate_to_ram(src/rp2_common/pico_cyw43_driver/cyw43_bus_pio_spi.c.o
     ".text.cyw43_spi_transfer=.time_critical.cyw43_spi_transfer|.text.cyw43_read_bytes=.time_critical.cyw43_read_bytes|.text.cyw43_write_bytes=.time_critical.cyw43_write_bytes|.text.cyw43_read_reg_u32=.time_critical.cyw43_read_reg_u32|.text.cyw43_read_reg_u16=.time_critical.cyw43_read_reg_u16|.text.cyw43_read_reg_u8=.time_critical.cyw43_read_reg_u8|.text.cyw43_write_reg_u32=.time_critical.cyw43_write_reg_u32|.text.cyw43_write_reg_u16=.time_critical.cyw43_write_reg_u16|.text.cyw43_write_reg_u8=.time_critical.cyw43_write_reg_u8|.text.read_reg_u32_swap=.time_critical.read_reg_u32_swap|.text.write_reg_u32_swap=.time_critical.write_reg_u32_swap|.text.ns_delay.constprop.0=.time_critical.cyw43_ns_delay"
