@@ -3,6 +3,7 @@
 //
 
 #include <cstdio>
+#include <algorithm>
 #include "bsp/board_api.h"
 #include "bt.h"
 #include "button_functions.h"
@@ -21,6 +22,7 @@
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
+#include "pico/time.h"
 #if ENABLE_SERIAL
 #include "pico/stdio_usb.h"
 #endif
@@ -34,6 +36,7 @@
 
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
+#include "pico/util/queue.h"
 
 uint8_t reportSeqCounter = 0;
 uint8_t packetCounter = 0;
@@ -53,7 +56,146 @@ uint8_t interrupt_in_data[63] = {
 critical_section_t report_cs;
 volatile bool report_dirty = false;
 
+static bool handle_output_report(const uint8_t *data, const uint16_t size) {
+    // A standard DualSense USB report 0x02 contains 47 state bytes, while
+    // SetStateData also covers the controller's larger 63-byte internal/Edge
+    // state. Accept the complete USB payload and zero-initialize the fields
+    // which are not present instead of dropping every standard output report.
+    constexpr uint16_t kUsbSetStatePayloadSize = 47;
+    if (size < kUsbSetStatePayloadSize) {
+        return false;
+    }
+
+    SetStateData state{};
+    memcpy(&state, data, std::min<uint16_t>(size, sizeof(state)));
+
+    const auto &config = get_config();
+    if (config.trigger_reduce > 0) {
+        state.AllowMotorPowerLevel = 1;
+        state.TriggerMotorPowerReduction = config.trigger_reduce;
+    }
+    if (config.speaker_gain > 0) {
+        state.AllowAudioControl2 = 1;
+        state.SpeakerCompPreGain = config.speaker_gain;
+    }
+    if (config.mic_select != 0) {
+        state.AllowAudioControl = 1;
+        state.MicSelect = config.mic_select;
+    }
+    if (config.lock_volume) {
+        state.AllowHeadphoneVolume = 0;
+        state.AllowMicVolume = 0;
+        state.AllowSpeakerVolume = 0;
+        state.AllowAudioMute = 0;
+        state.AllowMuteLight = 0;
+    }
+
+    uint8_t output_data[78]{};
+    output_data[0] = 0x31;
+    output_data[1] = static_cast<uint8_t>(reportSeqCounter << 4);
+    reportSeqCounter = static_cast<uint8_t>((reportSeqCounter + 1) & 0x0f);
+    output_data[2] = 0x10;
+    memcpy(output_data + 3, &state, sizeof(state));
+    bt_write(output_data, sizeof(output_data));
+#if ENABLE_VERBOSE
+    printf_hexdump(output_data, sizeof(output_data));
+#endif
+    return true;
+}
+
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+struct UsbSetReportWork {
+    uint8_t report_id;
+    hid_report_type_t report_type;
+    uint8_t size;
+    uint8_t data[64];
+};
+
+queue_t usb_set_report_queue;
+alignas(4) uint8_t usb_input_tx_buffer[63];
+
+static void usb_queues_init_before_tusb() {
+    queue_init(&usb_set_report_queue, sizeof(UsbSetReportWork), 4);
+}
+
+static void queue_usb_set_report(const uint8_t report_id,
+                                 const hid_report_type_t report_type,
+                                 const uint8_t *data,
+                                 const uint16_t size) {
+    UsbSetReportWork work{};
+    work.report_id = report_id;
+    work.report_type = report_type;
+    work.size = static_cast<uint8_t>(
+        std::min<uint16_t>(size, sizeof(work.data)));
+    memcpy(work.data, data, work.size);
+
+    if (!queue_try_add(&usb_set_report_queue, &work)) {
+        UsbSetReportWork stale{};
+        queue_try_remove(&usb_set_report_queue, &stale);
+        queue_try_add(&usb_set_report_queue, &work);
+    }
+}
+
+static void usb_set_report_task() {
+    UsbSetReportWork work{};
+    while (queue_try_remove(&usb_set_report_queue, &work)) {
+        if (is_pico_cmd(work.report_id)) {
+            pico_cmd_set(work.report_id, work.data, work.size);
+            continue;
+        }
+
+        if (work.report_type == HID_REPORT_TYPE_OUTPUT &&
+            work.report_id == 0x02) {
+            handle_output_report(work.data, work.size);
+            continue;
+        }
+
+        if (work.report_type == HID_REPORT_TYPE_FEATURE &&
+            (work.report_id == 0x80 || work.report_id == 0x60 ||
+             work.report_id == 0x62 || work.report_id == 0x61)) {
+            set_feature_data(work.report_id, work.data, work.size);
+        }
+    }
+}
+#endif
+
 void __not_in_flash_func(interrupt_loop)() {
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+    if (!tud_mounted() || tud_suspended() || !tud_hid_ready()) {
+        return;
+    }
+
+    const uint8_t polling_mode = get_config().polling_rate_mode;
+    const uint32_t now = to_ms_since_boot(get_absolute_time());
+    static uint32_t next_send_ms = 0;
+    if (polling_mode != 2 && static_cast<int32_t>(now - next_send_ms) < 0) {
+        return;
+    }
+
+    bool should_send = polling_mode != 2;
+    critical_section_enter_blocking(&report_cs);
+    if (report_dirty || polling_mode != 2) {
+        memcpy(usb_input_tx_buffer, interrupt_in_data, sizeof(usb_input_tx_buffer));
+        should_send = true;
+        report_dirty = false;
+    }
+    critical_section_exit(&report_cs);
+
+    if (!should_send) {
+        return;
+    }
+    if (tud_hid_report(0x01, usb_input_tx_buffer,
+                       sizeof(usb_input_tx_buffer))) {
+        if (polling_mode != 2) {
+            next_send_ms = now + (polling_mode == 1 ? 2u : 4u);
+        }
+    } else {
+        critical_section_enter_blocking(&report_cs);
+        report_dirty = true;
+        critical_section_exit(&report_cs);
+    }
+    return;
+#else
     if (!tud_hid_ready()) return;
 
     // TODO: Refactor for better code reuse
@@ -89,11 +231,12 @@ void __not_in_flash_func(interrupt_loop)() {
             critical_section_exit(&report_cs);
         }
     }
+#endif
 }
 
 void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
-    if (channel == INTERRUPT && len > 2 && data[1] == 0x31) {
+    if (channel == INTERRUPT && len >= 66 && data[1] == 0x31) {
         // Mic audio: controller signals mic payload via bit1 of data[2];
         // the opus-encoded mic frame starts at data+4.
         if ((data[2] >> 1) & 1) {
@@ -131,6 +274,7 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
         ps_shortcut_tick(data + 3, len - 3);
         #endif
 
+#if !defined(DS5_WAVESHARE_STABLE_RUNTIME)
         if (get_config().polling_rate_mode != 2) {
             memcpy(interrupt_in_data, data + 3, 63);
 #if ENABLE_BATT_LED
@@ -138,6 +282,7 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
 #endif
             return;
         }
+#endif
 
         // We add the critical section here to avoid any race conditions when writing to the interrupt_in_data buffer,
         // which is shared between the main loop and this callback.
@@ -178,6 +323,17 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     if (is_pico_cmd(report_id)) {
         return pico_cmd_get(report_id, buffer, reqlen);
     }
+
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+    if (report_type == HID_REPORT_TYPE_FEATURE) {
+        // Edge profiles are prefetched by dse_task(). NAK until the bounded
+        // main-loop job finishes instead of returning a cacheable zero page.
+        if (dse_is_profile_report(report_id) && !dse_profiles_ready()) {
+            return 0;
+        }
+        return bt_copy_cached_feature(report_id, buffer, reqlen);
+    }
+#endif
 
     // DSE profiles: while the unlock + prefetch is still in progress, return 0
     // (NAK) for profile reads so the PS app retries rather than caching an
@@ -222,6 +378,22 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         return;
     }
 #endif
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+    if (itf != 0) {
+        return;
+    }
+
+    // Interrupt OUT retains report ID 0x02 in the buffer; control SET_REPORT
+    // supplies it separately. Only copy here: state, heap and Bluetooth work
+    // must run later in the main loop, outside the USB callback.
+    if (report_type == HID_REPORT_TYPE_OUTPUT &&
+        report_id == 0 && bufsize > 1 && buffer[0] == 0x02) {
+        queue_usb_set_report(0x02, report_type, buffer + 1, bufsize - 1);
+        return;
+    }
+    queue_usb_set_report(report_id, report_type, buffer, bufsize);
+    return;
+#else
     (void) itf;
     (void) report_id;
     (void) report_type;
@@ -240,40 +412,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     if (report_id == 0) {
         switch (buffer[0]) {
             case 0x02: {
-                uint8_t outputData[78]{};
-                outputData[0] = 0x31;
-                outputData[1] = reportSeqCounter << 4;
-                reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
-                outputData[2] = 0x10;
-                SetStateData state{};
-                memcpy(&state,buffer + 1,sizeof(SetStateData));
-
-                const auto &config = get_config();
-                if (config.trigger_reduce > 0) {
-                    state.AllowMotorPowerLevel = 1;
-                    state.TriggerMotorPowerReduction = config.trigger_reduce;
-                }
-                if (config.speaker_gain > 0) {
-                    state.AllowAudioControl2 = 1;
-                    state.SpeakerCompPreGain = config.speaker_gain;
-                }
-                if (config.mic_select != 0) {
-                    state.AllowAudioControl = 1;
-                    state.MicSelect = config.mic_select;
-                }
-                if (config.lock_volume) {
-                    state.AllowHeadphoneVolume = 0;
-                    state.AllowMicVolume = 0;
-                    state.AllowSpeakerVolume = 0;
-                    state.AllowAudioMute = 0;
-                    state.AllowMuteLight = 0;
-                }
-
-                memcpy(outputData + 3, &state, sizeof(SetStateData));
-                bt_write(outputData, sizeof(outputData));
-#if ENABLE_VERBOSE
-                printf_hexdump(outputData,sizeof(outputData));
-#endif
+                handle_output_report(buffer + 1, bufsize - 1);
                 break;
             }
         }
@@ -285,6 +424,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         report_id == 0x61) {
         // set_feature_data(report_id, const_cast<uint8_t *>(buffer), bufsize);
     }
+#endif
 }
 
 int main() {
@@ -295,12 +435,18 @@ int main() {
 #endif
 
     board_init();
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+    // Windows can issue GET/SET requests immediately after tusb_init().
+    critical_section_init(&report_cs);
+    bt_feature_cache_init_before_tusb();
+    usb_queues_init_before_tusb();
+#endif
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
         .speed = TUSB_SPEED_FULL
     };
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
-#if !ENABLE_SERIAL
+#if !ENABLE_SERIAL && !defined(DS5_WAVESHARE_STABLE_RUNTIME)
     sleep_ms(150);
     tud_disconnect();
 #endif
@@ -323,7 +469,7 @@ int main() {
     battery_led_init();
 #endif
 
-#if !ENABLE_SERIAL
+#if !ENABLE_SERIAL && !defined(DS5_WAVESHARE_STABLE_RUNTIME)
     if (watchdog_caused_reboot()) {
         printf("Rebooted by Watchdog!\n");
         // 当崩溃重启以后，闪三下灯
@@ -341,7 +487,9 @@ int main() {
 #endif
 
     // Initialize the critical section for the report buffer
+#if !defined(DS5_WAVESHARE_STABLE_RUNTIME)
     critical_section_init(&report_cs);
+#endif
     wake_init();
 
     config_load();
@@ -352,16 +500,19 @@ int main() {
 
     audio_init();
 
-#if !ENABLE_SERIAL
+#if !ENABLE_SERIAL && !defined(DS5_WAVESHARE_STABLE_RUNTIME)
     watchdog_enable(1000, true);
 #endif
 
     while (1) {
-#if !ENABLE_SERIAL
+#if !ENABLE_SERIAL && !defined(DS5_WAVESHARE_STABLE_RUNTIME)
         watchdog_update();
 #endif
         cyw43_arch_poll();
         tud_task();
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+        usb_set_report_task();
+#endif
         wake_task();
         audio_loop();
 #if ENABLE_DEBUG

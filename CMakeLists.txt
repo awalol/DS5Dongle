@@ -306,6 +306,16 @@ target_compile_definitions(ds5-bridge PRIVATE
         DISABLE_SPEAKER_PROC=${DISABLE_SPEAKER_PROC_VALUE}
 )
 
+if (WAVESHARE_RP2350B_PLUS_W_BUILD)
+    target_compile_definitions(ds5-bridge PRIVATE
+            # Hardware-validated low-flash persistent layout. Accesses near
+            # the end of the advertised 16 MiB device stall this board.
+            DS5_WAVESHARE_STABLE_RUNTIME=1
+            DS5_CONFIG_FLASH_OFFSET=0x003FC000
+            PICO_FLASH_BANK_STORAGE_OFFSET=0x003FD000
+    )
+endif ()
+
 # Wake-on-PS + Xbox Game Bar are now in the base firmware, gated at runtime by the
 # enable_wake / ps_shortcut_enabled config fields. ENABLE_WAKE_HID stays defined so
 # the wake/keyboard descriptors and TinyUSB capacity compile in; the interface and

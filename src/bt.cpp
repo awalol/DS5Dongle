@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include "bt.h"
 #include <queue>
 #include <unordered_map>
@@ -25,6 +26,7 @@
 #if ENABLE_BATT_LED
 #include "battery_led.h"
 #endif
+#include "pico/critical_section.h"
 #if PICO_RP2350
 #include "hardware/regs/sio.h"
 #endif
@@ -76,6 +78,98 @@ struct send_element {
     uint8_t data[672];
     size_t len;
 };
+
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+constexpr uint16_t kFeatureCachePayloadMax = 64;
+
+struct FeatureCacheEntry {
+    uint8_t data[kFeatureCachePayloadMax];
+    uint8_t size;
+    bool ready;
+};
+
+struct control_send_element {
+    uint8_t data[128];
+    uint16_t len;
+};
+
+FeatureCacheEntry fixed_feature_cache[256]{};
+critical_section_t fixed_feature_cache_cs;
+queue_t control_send_fifo;
+
+static void bt_feature_cache_clear() {
+    critical_section_enter_blocking(&fixed_feature_cache_cs);
+    for (auto &entry : fixed_feature_cache) {
+        entry.size = 0;
+        entry.ready = false;
+    }
+    critical_section_exit(&fixed_feature_cache_cs);
+}
+
+static void bt_feature_cache_store(const uint8_t report_id,
+                                   const uint8_t *payload,
+                                   const uint16_t payload_size) {
+    const uint8_t copy_size = static_cast<uint8_t>(
+        std::min<uint16_t>(payload_size, kFeatureCachePayloadMax));
+    critical_section_enter_blocking(&fixed_feature_cache_cs);
+    auto &entry = fixed_feature_cache[report_id];
+    memcpy(entry.data, payload, copy_size);
+    if (copy_size < sizeof(entry.data)) {
+        memset(entry.data + copy_size, 0, sizeof(entry.data) - copy_size);
+    }
+    entry.size = copy_size;
+    entry.ready = true;
+    critical_section_exit(&fixed_feature_cache_cs);
+}
+
+void bt_feature_cache_init_before_tusb() {
+    critical_section_init(&fixed_feature_cache_cs);
+    bt_feature_cache_clear();
+}
+
+uint16_t bt_copy_cached_feature(const uint8_t report_id,
+                                uint8_t *buffer,
+                                const uint16_t requested_length) {
+    const uint16_t fallback_length =
+        std::min<uint16_t>(requested_length, kFeatureCachePayloadMax);
+    uint8_t cached_size = 0;
+    bool ready = false;
+
+    critical_section_enter_blocking(&fixed_feature_cache_cs);
+    const auto &entry = fixed_feature_cache[report_id];
+    ready = entry.ready;
+    cached_size = entry.size;
+    if (ready) {
+        memcpy(buffer, entry.data,
+               std::min<uint16_t>(requested_length, cached_size));
+    }
+    critical_section_exit(&fixed_feature_cache_cs);
+
+    if (ready) {
+        return std::min<uint16_t>(requested_length, cached_size);
+    }
+
+    // Never wait, allocate or initiate L2CAP from a USB control callback.
+    memset(buffer, 0, fallback_length);
+    return fallback_length;
+}
+
+static bool bt_queue_control(const uint8_t *data, const uint16_t len) {
+    if (hid_control_cid == 0 || len > sizeof(control_send_element::data)) {
+        return false;
+    }
+    control_send_element packet{};
+    packet.len = len;
+    memcpy(packet.data, data, len);
+    if (!queue_try_add(&control_send_fifo, &packet)) {
+        return false;
+    }
+    if (queue_get_level(&control_send_fifo) == 1) {
+        l2cap_request_can_send_now_event(hid_control_cid);
+    }
+    return true;
+}
+#endif
 
 absolute_time_t inactive_time = 0; // 手柄长时间静默
 
@@ -147,6 +241,9 @@ void bt_l2cap_init() {
 
 int bt_init() {
     queue_init(&send_fifo, sizeof(send_element), 10);
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+    queue_init(&control_send_fifo, sizeof(control_send_element), 10);
+#endif
 
     bt_l2cap_init();
 
@@ -596,7 +693,7 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
-#if !ENABLE_SERIAL
+#if !ENABLE_SERIAL && !defined(DS5_WAVESHARE_STABLE_RUNTIME)
             // Hide the USB device when no controller is paired (upstream behavior), EXCEPT when
             // wake is on (stay on the bus so a returning controller can signal a host wake) or
             // while the host is suspended -- hiding then re-showing re-enumerates, and a USB
@@ -617,6 +714,11 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             gpio_on_disconnect();
             while (queue_try_remove(&send_fifo, NULL)) {
             }
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+            while (queue_try_remove(&control_send_fifo, NULL)) {
+            }
+            bt_feature_cache_clear();
+#endif
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
 #if ENABLE_BATT_LED
             battery_led_on_disconnect();
@@ -649,6 +751,9 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
             bt_data_callback(INTERRUPT, packet, size);
 
             // 静默检测
+            if (size < 13) {
+                return;
+            }
             if (!(packet[2] & 1) || get_config().inactive_time == 0) {
                 return;
             }
@@ -667,15 +772,18 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                 bt_disconnect();
             }
         } else if (channel == hid_control_cid) {
-            if (packet[0] == 0xA3) {
+            if (size >= 2 && packet[0] == 0xA3) {
                 const uint8_t report_id = packet[1];
                 feature_data[report_id].assign(packet + 2, packet + size);
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+                bt_feature_cache_store(report_id, packet + 2, size - 2);
+#endif
 #if ENABLE_VERBOSE
                 printf("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 2);
                 printf("[L2CAP] HID Control data len=%u\n", size);
                 printf_hexdump(packet, size);
 #endif
-                if (report_id == 0x20) {
+                if (report_id == 0x20 && size >= 24) {
                     if (packet[23] == 0x44) {
                         printf("Connected DSE Controller\n");
                         is_dse = true;
@@ -688,12 +796,11 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                         printf("Connected DS5 Controller\n");
                         is_dse = false;
                     }
-#if !ENABLE_SERIAL
+#if !ENABLE_SERIAL && !defined(DS5_WAVESHARE_STABLE_RUNTIME)
                     if (!tud_suspended()) tud_connect();
 #endif
                 }
             }
-
             dse_on_control_packet(packet, size);
             bt_data_callback(CONTROL, packet, size);
         } else {
@@ -808,7 +915,27 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
 
         case L2CAP_EVENT_CAN_SEND_NOW: {
             // printf("[L2CAP] L2CAP_EVENT_CAN_SEND_NOW\n");
-
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+            const uint16_t can_send_cid =
+                l2cap_event_can_send_now_get_local_cid(packet);
+            if (can_send_cid == hid_control_cid) {
+                control_send_element control_packet{};
+                if (queue_try_remove(&control_send_fifo, &control_packet)) {
+                    const uint8_t status = l2cap_send(
+                        hid_control_cid, control_packet.data, control_packet.len);
+                    if (status != 0) {
+                        printf("[L2CAP control] Send error: 0x%02X\n", status);
+                    }
+                }
+                if (!queue_is_empty(&control_send_fifo)) {
+                    l2cap_request_can_send_now_event(hid_control_cid);
+                }
+                break;
+            }
+            if (can_send_cid != hid_interrupt_cid) {
+                break;
+            }
+#endif
             send_element send_packet{};
             if (queue_try_remove(&send_fifo, &send_packet)) {
                 const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
@@ -831,7 +958,11 @@ uint16_t bt_control_cid() {
 
 void bt_control_send(const uint8_t *data, uint16_t len) {
     if (hid_control_cid != 0) {
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+        bt_queue_control(data, len);
+#else
         l2cap_send(hid_control_cid, const_cast<uint8_t *>(data), len);
+#endif
     }
 }
 
@@ -872,7 +1003,11 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     ) {
         if (hid_control_cid != 0) {
             uint8_t get_feature[] = {0x43, reportId};
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+            bt_queue_control(get_feature, sizeof(get_feature));
+#else
             l2cap_send(hid_control_cid, get_feature, sizeof(get_feature));
+#endif
 #if ENABLE_VERBOSE
             printf("[L2CAP] Requesting Get Feature Report 0x%02X\n", reportId);
 #endif
@@ -888,7 +1023,11 @@ void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
         get_feature[1] = reportId;
         memcpy(get_feature + 2, data, len);
         fill_feature_report_checksum(get_feature + 1, len + 1);
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+        bt_queue_control(get_feature, len + 2);
+#else
         l2cap_send(hid_control_cid, get_feature, len + 2);
+#endif
 #if ENABLE_VERBOSE
         printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
         printf_hexdump(get_feature, len + 2);
@@ -899,6 +1038,9 @@ void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
 
 void init_feature() {
     feature_data.clear();
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+    bt_feature_cache_clear();
+#endif
     get_feature_data(0x09, 20);
     get_feature_data(0x20, 64);
     get_feature_data(0x22, 64);

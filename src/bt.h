@@ -28,6 +28,10 @@ void bt_set_scan_active();
 void dse_unlock_task();
 bool bt_dse_profiles_ready();
 void bt_write(const uint8_t *data, uint16_t len);
+#if defined(DS5_WAVESHARE_STABLE_RUNTIME)
+void bt_feature_cache_init_before_tusb();
+uint16_t bt_copy_cached_feature(uint8_t report_id, uint8_t *buffer, uint16_t requested_length);
+#endif
 void bt_get_signal_strength(int8_t *rssi);
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
