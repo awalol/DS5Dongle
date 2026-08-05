@@ -105,6 +105,20 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
         if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
             set_headset(data[56] & 1);
         }
+        // PluggedMic (53.1) drives mic auto. The controller will not move off the
+        // builtin mic by itself, so re-push MicSelect whenever the jack mic
+        // appears or goes away; a plug event is the only moment it can change.
+        if (((data[56] >> 1) & 1) != ((interrupt_in_data[53] >> 1) & 1)) {
+            set_plug_mic((data[56] >> 1) & 1);
+#if ENABLE_VERBOSE
+            printf("[Audio] PluggedHeadphones=%u PluggedMic=%u PluggedExternalMic=%u\n",
+                   data[56] & 1, (data[56] >> 1) & 1, data[57] & 1);
+#endif
+            SetStateData state{};
+            state.AllowAudioControl = 1;
+            state.MicSelect = effective_mic_select();
+            update_state(state);
+        }
         if (((data[56] >> 2) & 1) != ((interrupt_in_data[53] >> 2) & 1)) {
             const SetStateData state{
                 .AllowMuteLight = 1,
@@ -257,9 +271,13 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     state.AllowAudioControl2 = 1;
                     state.SpeakerCompPreGain = config.speaker_gain;
                 }
-                if (config.mic_select != 0) {
-                    state.AllowAudioControl = 1;
-                    state.MicSelect = config.mic_select;
+                // Only correct MicSelect when the host's own report already carries
+                // an AudioControl section. Newly setting AllowAudioControl here
+                // would also apply the host's unset OutputPathSelect / echo /
+                // noise-cancel fields; the value pushed on the last plug event or
+                // at connect stays latched on the controller regardless.
+                if (state.AllowAudioControl) {
+                    state.MicSelect = effective_mic_select();
                 }
                 if (config.lock_volume) {
                     state.AllowHeadphoneVolume = 0;

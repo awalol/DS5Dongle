@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "audio.h"
 #include "bt.h"
 #include "status_gpio.h"
 #include "utils.h"
@@ -198,7 +199,7 @@ void set_config(const uint8_t *new_config, const uint16_t len) {
         state.SpeakerCompPreGain = config.body.speaker_gain;
     }
     state.AllowAudioControl = 1;
-    state.MicSelect = config.body.mic_select;
+    state.MicSelect = effective_mic_select();
     update_state(state);
 }
 

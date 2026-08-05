@@ -8,6 +8,7 @@
 #include <queue>
 #include <unordered_map>
 #include <vector>
+#include "audio.h"
 #include "btstack_event.h"
 #include "btstack_tlv.h"
 #include "gap.h"
@@ -742,7 +743,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                     SetStateData state = {
                         .AllowAudioControl = 1,
                         .AllowLedColor = 1,
-                        .MicSelect = get_config().mic_select,
+                        .MicSelect = effective_mic_select(),
                         .AllowLightBrightnessChange = 1,
                         .AllowColorLightFadeAnimation = 1,
                         .LightFadeAnimation = LightFadeAnimation::FadeOut,

@@ -44,6 +44,7 @@ static WDL_Resampler resampler;
 extern uint8_t reportSeqCounter;
 extern uint8_t packetCounter;
 static bool plug_headset = false;
+static bool plug_mic = false;   // controller reports a mic on the 3.5 mm jack
 static bool mic_active = false; // host has opened the mic IN interface (alt != 0)
 alignas(8) static uint32_t audio_core1_stack[7000];
 queue_t audio_fifo; // raw pcm data
@@ -75,6 +76,26 @@ struct haptics_element {
 
 void set_headset(bool state) {
     plug_headset = state;
+}
+
+// PluggedMic (input report 53.1). Tracked separately from PluggedHeadphones
+// because a 3-pole plug asserts the headphone bit with no mic behind it.
+void set_plug_mic(bool state) {
+    plug_mic = state;
+}
+
+// The controller's own Auto mode keeps the builtin mic even with a headset mic
+// plugged in, so resolve auto here the way the speaker path already does with
+// plug_headset.
+//
+// Both branches must return a concrete value: once External Only has been sent,
+// the controller latches it, so unplugging the headset has to actively push it
+// back to Internal Only. Returning 0 ("leave it in Auto") on unplug means no
+// report is sent at all and the mic goes silent with no external mic present.
+uint8_t effective_mic_select() {
+    const uint8_t configured = get_config().mic_select;
+    if (configured != 0) return configured;
+    return plug_mic ? 2 : 1; // 2 = External Only, 1 = Internal Only
 }
 
 // Called from tud_audio_set_itf_cb when the host opens/closes the mic IN
