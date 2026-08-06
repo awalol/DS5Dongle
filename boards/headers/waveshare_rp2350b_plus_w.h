@@ -24,6 +24,15 @@ pico_board_cmake_set(PICO_DEFAULT_BOOT_STAGE2, boot2_w25q080)
 // --- RP2350 VARIANT ---
 #define PICO_RP2350A 0
 
+// LED1 is CYW43 GPIO0. LED2 is directly connected to RP2350B GPIO23.
+#ifndef PICO_DEFAULT_LED_PIN
+#define PICO_DEFAULT_LED_PIN 23
+#endif
+
+#ifndef PICO_DEFAULT_LED_PIN_INVERTED
+#define PICO_DEFAULT_LED_PIN_INVERTED 0
+#endif
+
 // --- UART ---
 #ifndef PICO_DEFAULT_UART
 #define PICO_DEFAULT_UART 0
@@ -71,7 +80,7 @@ pico_board_cmake_set(PICO_DEFAULT_BOOT_STAGE2, boot2_w25q080)
 #define PICO_FLASH_SPI_CLKDIV 2
 #endif
 
-// pico_cmake_set_default PICO_FLASH_SIZE_BYTES = (4 * 1024 * 1024)
+pico_board_cmake_set_default(PICO_FLASH_SIZE_BYTES, (16 * 1024 * 1024))
 #ifndef PICO_FLASH_SIZE_BYTES
 #define PICO_FLASH_SIZE_BYTES (16 * 1024 * 1024)
 #endif
