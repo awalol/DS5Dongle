@@ -13,11 +13,11 @@
 // level, so one late burst costs one gap instead of a gap per USB frame.
 //
 
+#include "port/port.h"
 #include "elastic.h"
 
 #include <algorithm>
 #include <cstring>
-#include "pico.h"
 
 static constexpr uint64_t ONE_Q32 = 1ull << 32;
 static constexpr uint32_t PULLS_PER_UPDATE = 10; // one control update per 10 ms of pulls
@@ -105,11 +105,11 @@ struct Elastic {
 // only has to follow ppm-level drift.
 static Elastic<1, 6144> mic{.target = 2400, .kp_ppb = 100, .ti_s = 60};
 
-void __not_in_flash_func(mic_elastic_write)(const int16_t *samples, int count) {
+void PORT_FAST_FUNC(mic_elastic_write)(const int16_t *samples, int count) {
     mic.push(samples, count);
 }
 
-bool __not_in_flash_func(mic_elastic_read)(int16_t *out, int count) {
+bool PORT_FAST_FUNC(mic_elastic_read)(int16_t *out, int count) {
     if (!mic.running && !mic.try_start()) return false;
     return mic.pull(out, count);
 }

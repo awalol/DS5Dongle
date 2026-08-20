@@ -2,17 +2,17 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include "port/port.h"
+
 #include <algorithm>
 
 #include "bt.h"
 #include "tusb.h"
-#include "bsp/board_api.h"
 #include "config.h"
 #include "utils.h"
 #include "usb.h"
 #include "wake.h"
 #include "audio.h"
-#include "pico/time.h"
 
 // USB descriptor mode: true exposes only the wake keyboard; false exposes the full device.
 bool usb_keyboard_only = false;
@@ -29,7 +29,7 @@ void usb_reconnect(bool keyboard_only) {
     extern bool spk_active;
     spk_active = false;
     set_mic_active(false);
-    sleep_ms(150);
+    port::delay_ms(150);
     tud_connect();
 }
 

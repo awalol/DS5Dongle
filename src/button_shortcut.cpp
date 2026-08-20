@@ -1,3 +1,4 @@
+#include "port/port.h"
 #include "button_shortcut.h"
 
 #include <cstring>
@@ -7,7 +8,6 @@
 #include "button_utils.h"
 #include "config.h"
 #include "tusb.h"
-#include "pico/time.h"
 #include "utils.h"
 
 // Kept outside the ENABLE_WAKE_HID guard below: config_load() normalizes the
@@ -54,7 +54,12 @@ static constexpr uint8_t CONSUMER_INSTANCE = 2;
 static constexpr uint32_t KEY_PRESS_MS = 30;
 
 static bool release_pending = false;
-static absolute_time_t release_time = nil_time;
+// Deadlines are microseconds since boot. 0 counts as already reached, which is
+// what pico-sdk's nil_time meant here.
+static uint64_t deadline_after_ms(uint32_t ms) { return port::now_us() + uint64_t(ms) * 1000u; }
+static bool deadline_reached(uint64_t deadline) { return port::now_us() >= deadline; }
+
+static uint64_t release_time = 0;
 static uint8_t release_instance = KEYBOARD_INSTANCE; // Which interface owes a release report.
 static uint16_t pending_mask = 0; // Triggered slots waiting to send their HID report.
 
@@ -63,7 +68,7 @@ static_assert(BUTTON_SHORTCUT_COUNT <= 16, "slot masks are 16 bits wide");
 // A slot is "engaged" while its trigger is pressed, which for a chord means both
 // buttons held; taps and chords share one state machine from there on.
 static uint8_t tap_count[BUTTON_SHORTCUT_COUNT]{};
-static absolute_time_t tap_deadline[BUTTON_SHORTCUT_COUNT]{};
+static uint64_t tap_deadline[BUTTON_SHORTCUT_COUNT]{};
 static uint16_t engaged_mask = 0; // Last-tick engagement of each slot; fire on 0 -> 1.
 // Tap slots whose current press was taken by a chord on the same button. Sticky
 // until the button comes back up, so a chord that has already come and gone
@@ -75,7 +80,7 @@ static uint16_t chord_claimed_mask = 0;
 // update and the read sit next to each other in the main-loop task.
 static bool shortcut_learning = false;
 static bool shortcut_learning_reset = true; // state machine cleared for this window
-static absolute_time_t shortcut_learning_until = nil_time;
+static uint64_t shortcut_learning_until = 0;
 
 // Merge physical holds and the existing timed pulse into one keyboard report.
 struct KeyboardState {
@@ -99,7 +104,7 @@ static bool shortcuts_available() {
 static void start_pulse(uint8_t instance) {
     release_pending = true;
     release_instance = instance;
-    release_time = make_timeout_time_ms(KEY_PRESS_MS);
+    release_time = deadline_after_ms(KEY_PRESS_MS);
 }
 
 static bool send_keyboard_state(bool include_pulse) {
@@ -245,7 +250,7 @@ static bool tap_tick(uint8_t slot, const ButtonShortcut &shortcut, bool engaged,
                 return true; // Nothing else claims the double press: fire right away.
             }
             tap_count[slot] = 1;
-            tap_deadline[slot] = make_timeout_time_ms(SHORTCUT_TAP_WINDOW_MS);
+            tap_deadline[slot] = deadline_after_ms(SHORTCUT_TAP_WINDOW_MS);
             return false;
         }
         // Second press inside the window: the double-press slot fires, the
@@ -269,14 +274,14 @@ static bool tap_tick(uint8_t slot, const ButtonShortcut &shortcut, bool engaged,
             tap_count[slot] = 0;
             return true; // Released without the chord forming, and nothing wants a second press.
         }
-        if (time_reached(tap_deadline[slot])) {
+        if (deadline_reached(tap_deadline[slot])) {
             tap_count[slot] = 0;
             return !want_double; // The window closed on a lone press.
         }
         return false;
     }
 
-    if (tap_count[slot] && time_reached(tap_deadline[slot])) {
+    if (tap_count[slot] && deadline_reached(tap_deadline[slot])) {
         tap_count[slot] = 0;
         return !want_double; // The window closed on a lone press.
     }
@@ -377,7 +382,7 @@ void button_shortcut_reset() {
         (release_pending && release_instance == CONSUMER_INSTANCE);
     release_pending = false;
     release_instance = KEYBOARD_INSTANCE;
-    release_time = nil_time;
+    release_time = 0;
     pending_mask = 0;
     engaged_mask = 0;
     chord_claimed_mask = 0;
@@ -385,7 +390,7 @@ void button_shortcut_reset() {
     host_sleep_active = false;
     for (uint8_t i = 0; i < BUTTON_SHORTCUT_COUNT; ++i) {
         tap_count[i] = 0;
-        tap_deadline[i] = nil_time;
+        tap_deadline[i] = 0;
     }
 }
 
@@ -393,7 +398,7 @@ void button_shortcut_task() {
     // Also called without BT input so endpoint backpressure/disconnect releases retry.
     if (!shortcuts_available()) return;
     if (shortcut_learning) {
-        if (time_reached(shortcut_learning_until)) {
+        if (deadline_reached(shortcut_learning_until)) {
             shortcut_learning = false;
         } else if (!shortcut_learning_reset) {
             // The config UI is capturing a trigger, so the shortcut output has
@@ -417,7 +422,7 @@ void button_shortcut_task() {
         send_keyboard_state(false);
         return; // Keep the explicit all-up report separate from a new press.
     }
-    if (release_pending && time_reached(release_time)) {
+    if (release_pending && deadline_reached(release_time)) {
         if (tud_hid_n_ready(release_instance) && send_release(release_instance)) {
             release_pending = false;
         }
@@ -441,7 +446,7 @@ void button_shortcut_tick(const USBGetStateData &state) {
     if (shortcut_learning) {
         // Reading the deadline here is what ends the window; BT input arrives
         // anyway, so learning does not depend on button_shortcut_task() running.
-        if (!time_reached(shortcut_learning_until)) return;
+        if (!deadline_reached(shortcut_learning_until)) return;
         shortcut_learning = false;
     }
     process_shortcuts(state);
@@ -451,7 +456,7 @@ void button_shortcut_tick(const USBGetStateData &state) {
 void button_shortcut_start_learning() {
     shortcut_learning = true;
     shortcut_learning_reset = false;
-    shortcut_learning_until = make_timeout_time_ms(SHORTCUT_LEARNING_WINDOW_MS);
+    shortcut_learning_until = deadline_after_ms(SHORTCUT_LEARNING_WINDOW_MS);
 }
 
 void trigger_host_sleep() {
