@@ -18,3 +18,4 @@ jobs:
       picow: true
       waveshare: true
       no_batt_led_check: true
+      esp32s31: true
