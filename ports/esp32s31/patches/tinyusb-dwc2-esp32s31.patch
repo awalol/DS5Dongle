@@ -1,0 +1,114 @@
+--- a/src/portable/synopsys/dwc2/dcd_dwc2.c	2026-09-08 16:10:31.412486303 -0400
++++ b/src/portable/synopsys/dwc2/dcd_dwc2.c	2026-09-08 19:34:34.839194647 -0400
+@@ -52,6 +52,7 @@
+   uint16_t total_len;
+   uint16_t max_size;
+   uint8_t interval;
++  uint16_t iso_target_frame; // (micro)frame this ISO transfer was armed for
+   uint8_t iso_retry; // ISO retry counter
+ } xfer_ctl_t;
+ 
+@@ -398,11 +399,19 @@
+   depctl.enable = 1;
+   if (depctl.type == DEPCTL_EPTYPE_ISOCHRONOUS) {
+     const dwc2_dsts_t dsts = {.value = dwc2->dsts};
+-    const uint32_t odd_now = dsts.frame_number & 1u;
+-    if (odd_now != 0) {
+-      depctl.set_data0_iso_even = 1;
+-    } else {
++    // Target the (micro)frame this endpoint is next scheduled in -- one
++    // interval away, not simply the next one. The two coincide only at
++    // interval 1, so this is invisible at full speed with bInterval 1 and wrong
++    // at high speed with bInterval 4: that is 8 microframes, so the target has
++    // the same parity, not the opposite. Get it wrong and the core waits for a
++    // slot that never matches and abandons the transfer. xfer->interval is
++    // already in frame_number units (see edpt_activate).
++    const uint32_t target = dsts.frame_number + xfer->interval;
++    xfer->iso_target_frame = (uint16_t) (target & 0x3FFFu);
++    if (target & 1u) {
+       depctl.set_data1_iso_odd = 1;
++    } else {
++      depctl.set_data0_iso_even = 1;
+     }
+   }
+ 
+@@ -727,7 +736,17 @@
+ 
+   // Clear stall and reset data toggle
+   dep->ctl &= ~EPCTL_STALL;;
+-  dep->ctl |= EPCTL_SD0PID_SEVNFRM;
++
++  // On an isochronous endpoint EPCTL_SD0PID_SEVNFRM is not a data toggle -- it
++  // is SetEvenFrame, which retargets an already-armed transfer at an even
++  // (micro)frame. Windows sends CLEAR_FEATURE(ENDPOINT_HALT) on the iso OUT
++  // endpoint immediately before it starts streaming, so applying it there
++  // overwrites the parity the transfer was armed with, and when the target
++  // frame is odd the core aborts the transfer and disables the endpoint.
++  const dwc2_depctl_t clr_depctl = {.value = dep->ctl};
++  if (clr_depctl.type != DEPCTL_EPTYPE_ISOCHRONOUS) {
++    dep->ctl |= EPCTL_SD0PID_SEVNFRM;
++  }
+ }
+ 
+ //--------------------------------------------------------------------
+@@ -1176,9 +1195,45 @@
+   Note: when OTG_MULTI_PROC_INTRPT = 1, Device Each endpoint interrupt deachint/deachmsk/diepeachmsk/doepeachmsk
+   are combined to generate dedicated interrupt line for each endpoint.
+  */
++
++// An isochronous OUT transfer that misses its scheduled (micro)frame is left
++// armed but never completes, and the endpoint stays stuck with nothing to
++// restart it -- which is how this port arrived at a silent speaker. Re-arming
++// through edpt_schedule_packets() reuses the normal path, so the parity above
++// is applied the same way. In practice this only fires while a stream is
++// starting up; once running, transfers complete in their target frame.
++static void handle_incomplete_iso_out(uint8_t rhport) {
++  dwc2_regs_t* dwc2 = DWC2_REG(rhport);
++  const dwc2_dsts_t dsts = {.value = dwc2->dsts};
++  const uint8_t ep_count = _dwc2_controller[rhport].ep_count;
++
++  for (uint8_t epnum = 1; epnum < ep_count; epnum++) {
++    const dwc2_depctl_t depctl = {.value = dwc2->epout[epnum].doepctl};
++    if (!depctl.enable || depctl.type != DEPCTL_EPTYPE_ISOCHRONOUS) continue;
++
++    xfer_ctl_t* xfer = XFER_CTL_BASE(epnum, TUSB_DIR_OUT);
++    if (xfer->total_len == 0) continue;
++
++    // diff counts microframes at high speed. The endpoint is armed for a whole
++    // interval, so anything less than one is still in flight -- re-arming there
++    // clobbers a transfer that was about to complete.
++    const uint16_t diff = (uint16_t) (((dsts.frame_number & 0x3FFFu) - xfer->iso_target_frame) & 0x3FFFu);
++    if (diff < xfer->interval || diff > 0x2000u) continue;
++
++    edpt_schedule_packets(rhport, epnum, TUSB_DIR_OUT);
++  }
++}
++
++
+ void dcd_int_handler(uint8_t rhport) {
+   dwc2_regs_t* dwc2 = DWC2_REG(rhport);
+   const uint32_t gintmask = dwc2->gintmsk;
++  // Read RAW first: INCOMPISOOUT is never unmasked, so it would be invisible
++  // below. Observe and clear only -- recovery is what hung this port before.
++  if (dwc2->gintsts & GINTSTS_PXFR_INCOMPISOOUT) {
++    dwc2->gintsts = GINTSTS_PXFR_INCOMPISOOUT;
++    handle_incomplete_iso_out(rhport);
++  }
+   const uint32_t gintsts = dwc2->gintsts & gintmask;
+ 
+   if (gintsts & GINTSTS_USBRST) {
+--- a/src/portable/synopsys/dwc2/dwc2_esp32.h	2026-09-08 18:54:43.739446742 -0400
++++ b/src/portable/synopsys/dwc2/dwc2_esp32.h	2026-09-08 18:54:43.779446738 -0400
+@@ -117,7 +117,11 @@
+ 
+ TU_ATTR_ALWAYS_INLINE static inline void dwc2_int_set(uint8_t rhport, tusb_role_t role, bool enabled) {
+   if (enabled) {
+-    esp_intr_alloc(_dwc2_controller[rhport].irqnum, ESP_INTR_FLAG_LOWMED,
++    // LOWMED takes the lowest free priority (level 1). This ISR has a hard 1 ms
++    // deadline and shares the part with a Bluetooth controller that runs well
++    // above it, so at level 1 it is preempted by most of the system. LEVEL3 is
++    // the highest priority still serviceable by a C handler.
++    esp_intr_alloc(_dwc2_controller[rhport].irqnum, ESP_INTR_FLAG_LEVEL3,
+                    dwc2_int_handler_wrap, (void*)(uintptr_t)tu_u16(role, rhport), &usb_ih[rhport]);
+   } else {
+     esp_intr_free(usb_ih[rhport]);

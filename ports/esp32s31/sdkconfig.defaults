@@ -1,0 +1,71 @@
+# ESP32-S31-Function-CoreBoard-1 defaults.
+
+CONFIG_IDF_TARGET="esp32s31"
+
+# --- Flash / PSRAM (ESP32-S31-WROOM-3: 16MB each) ---------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Bluetooth -------------------------------------------------------------
+# The DualSense connects over Bluetooth Classic HID, so BR/EDR is mandatory.
+# Confirmed available on this target: components/soc/esp32s31/include/soc/soc_caps.h
+# defines SOC_BT_CLASSIC_SUPPORTED (1), and the controller ships libbredr_app.a
+# under components/bt/controller/lib_esp32s31/.
+#
+# Controller-only: BTstack is the host, so neither Bluedroid nor NimBLE is built.
+# BTDM_CTRL_MODE_BR_EDR_ONLY is what actually sets BT_CTRL_BREDR_ENABLE --
+# BT_CLASSIC_ENABLED is a Bluedroid host symbol and does nothing here.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_ONLY=y
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
+
+# BR/EDR requires an external crystal as RTC slow clock source
+# (components/bt/porting_btdm/Kconfig.in gates on RTC_CLK_SRC_EXT_CRYS).
+CONFIG_RTC_CLK_SRC_EXT_CRYS=y
+
+# --- CPU / scheduling ------------------------------------------------------
+CONFIG_FREERTOS_UNICORE=n
+# 240 MHz deliberately, not by omission -- this part also offers 320, IDF's
+# default here. One DualSense does not need it, and the lower clock costs less
+# power and heat. Revisit for multi-controller work, but it perturbs the same
+# timing-sensitive paths as everything else here, so it needs a hardware pass.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Core allocation. The audio worker gets core 1, mirroring the RP2350 build's
+# bare second core, so everything else is pinned to core 0 explicitly rather
+# than left to defaults.
+#
+# The exception is the BT controller, which must NOT share a core with the USB
+# interrupt: esp_intr_alloc registers that interrupt on whichever core calls it
+# (the main task, core 0), and the controller's interrupt-disabling critical
+# sections there stall the isochronous audio endpoint for milliseconds at a
+# time. That puts it on core 1 with the audio worker; verified on hardware for
+# pairing, both reconnect paths, lightbar and audio under load. If BT ever
+# misbehaves under load, the alternative is registering the USB interrupt on
+# core 1 instead, which needs the init path restructured.
+CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE_1=y
+CONFIG_ESP_TIMER_TASK_AFFINITY_CPU0=y
+CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0=y
+
+# Consequence of the above: core 1's idle task never runs, so it must not be
+# watched.
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+
+# The firmware configures the task watchdog itself (port::watchdog_enable), so
+# do not let IDF initialise it at startup -- that made our esp_task_wdt_init()
+# fail with ESP_ERR_INVALID_STATE and log a spurious error on every boot.
+CONFIG_ESP_TASK_WDT_INIT=n
+
+# 1 ms ticks rather than 10 ms. The audio path works in sub-millisecond
+# deadlines, and the coarse default makes every scheduler-mediated wait far too
+# blunt to be useful.
+CONFIG_FREERTOS_HZ=1000
+
+# --- Performance -----------------------------------------------------------
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
