@@ -2,8 +2,9 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include "port/port.h"
+#include "tusb.h"
 #include <cstdio>
-#include "bsp/board_api.h"
 #include "bt.h"
 #include "button_functions.h"
 #include "utils.h"
@@ -17,10 +18,6 @@
 #ifdef ENABLE_WAKE_HID
 #include "ps_shortcut.h"
 #endif
-#include "hardware/clocks.h"
-#include "hardware/vreg.h"
-#include "hardware/watchdog.h"
-#include "pico/cyw43_arch.h"
 #if ENABLE_SERIAL
 #include "pico/stdio_usb.h"
 #endif
@@ -33,7 +30,6 @@
 #endif
 
 // Pico SDK speciifically for waiting on conditions
-#include "pico/critical_section.h"
 
 uint8_t reportSeqCounter = 0;
 uint8_t packetCounter = 0;
@@ -50,10 +46,10 @@ uint8_t interrupt_in_data[63] = {
     0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b
 };
 
-critical_section_t report_cs;
+port::CriticalSection report_cs;
 volatile bool report_dirty = false;
 
-void __not_in_flash_func(interrupt_loop)() {
+void PORT_FAST_FUNC(interrupt_loop)() {
     if (!tud_hid_ready()) return;
 
     // TODO: Refactor for better code reuse
@@ -69,13 +65,13 @@ void __not_in_flash_func(interrupt_loop)() {
     uint8_t safe_report[63];
 
 
-    critical_section_enter_blocking(&report_cs);
+    report_cs.enter();
     if (report_dirty) {
         memcpy(safe_report, interrupt_in_data, 63);
         report_dirty = false;
         should_send = true;
     }
-    critical_section_exit(&report_cs);
+    report_cs.exit();
 
     // Only send to TinyUSB if we actually grabbed fresh data
     if (should_send) {
@@ -84,14 +80,14 @@ void __not_in_flash_func(interrupt_loop)() {
 
             // If the report failed to queue, restore the dirty flag 
             // so we try again on the next loop iteration.
-            critical_section_enter_blocking(&report_cs);
+            report_cs.enter();
             report_dirty = true;
-            critical_section_exit(&report_cs);
+            report_cs.exit();
         }
     }
 }
 
-void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
+void PORT_FAST_FUNC(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
     if (channel == INTERRUPT && len > 2 && data[1] == 0x31) {
         // Mic audio: controller signals mic payload via bit1 of data[2];
@@ -145,10 +141,10 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
         // preventing data corruption and ensuring thread safety.
         // We also set the report_dirty flag to true to indicate that new data is available
         //  and needs to be sent in the next interrupt report.
-        critical_section_enter_blocking(&report_cs);
+        report_cs.enter();
         memcpy(interrupt_in_data, data + 3, 63);
         report_dirty = true;
-        critical_section_exit(&report_cs);
+        report_cs.exit();
 #if ENABLE_BATT_LED
         battery_led_note_report();
 #endif
@@ -271,6 +267,31 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 }
 
                 memcpy(outputData + 3, &state, sizeof(SetStateData));
+                if (state.AllowLedColor) {
+                    bt_note_host_led(state.LedRed, state.LedGreen, state.LedBlue);
+                }
+#if defined(DS5_FEATURE_TRACE)
+                // Quiet by design: only report when the host actually asks for a
+                // lightbar change, so rumble and trigger traffic does not drown
+                // the log. This answers whether Steam's colour changes reach us
+                // at all after a reconnect, which splits "the host stopped
+                // sending" from "the controller stopped listening".
+                {
+                    static uint8_t last_r = 0, last_g = 0, last_b = 0;
+                    static bool seen = false;
+                    if (state.AllowLedColor || state.ResetLights ||
+                        !seen || state.LedRed != last_r || state.LedGreen != last_g ||
+                        state.LedBlue != last_b) {
+                        printf("[%lu] [LED] host report: allow=%u reset=%u rgb=%02X%02X%02X fade=%u bright=%u\n",
+                               (unsigned long) port::now_ms(), (unsigned) state.AllowLedColor,
+                               (unsigned) state.ResetLights,
+                               state.LedRed, state.LedGreen, state.LedBlue,
+                               (unsigned) state.LightFadeAnimation, (unsigned) state.LightBrightness);
+                        last_r = state.LedRed; last_g = state.LedGreen; last_b = state.LedBlue;
+                        seen = true;
+                    }
+                }
+#endif
                 bt_write(outputData, sizeof(outputData));
 #if ENABLE_VERBOSE
                 printf_hexdump(outputData,sizeof(outputData));
@@ -289,56 +310,55 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 }
 
 int main() {
-#if SYS_CLOCK_KHZ != 150000
-    vreg_set_voltage(VREG_VOLTAGE_1_20);
-    sleep_ms(1000);
-    set_sys_clock_khz(SYS_CLOCK_KHZ, true);
-#endif
+    port::clocks_init();
 
-    board_init();
+    port::board_init();
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
-        .speed = TUSB_SPEED_FULL
+        .speed = static_cast<tusb_speed_t>(port::kUsbSpeed)
     };
-    tusb_init(BOARD_TUD_RHPORT, &dev_init);
+    tusb_init(port::kUsbRhPort, &dev_init);
 #if !ENABLE_SERIAL
-    sleep_ms(150);
+    port::delay_ms(150);
     tud_disconnect();
 #endif
-    board_init_after_tusb();
+    port::board_init_after_tusb();
 #if ENABLE_SERIAL
     stdio_usb_init();
     while (!stdio_usb_connected()) {
         tud_task();
     }
-    sleep_ms(150);
+    port::delay_ms(150);
 #endif
 
-    if (cyw43_arch_init()) {
-        printf("Failed to initialize CYW43\n");
+    if (!port::bt_transport_init()) {
+        printf("Failed to initialize BT transport\n");
         return 1;
     }
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+    // Must precede any led_set(): on ESP32-S31 this creates the RMT handle for
+    // the addressable LED, without which led_set() silently does nothing. The
+    // Pico backend only needs it to drive the pin low, which is what the
+    // following call did on its own before.
+    port::led_init();
+    port::led_set(false);
 
-#ifdef CYW43_WL_GPIO_SMPS_PIN
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_SMPS_PIN, true);
-#endif
+    port::smps_force_pwm();
 
 #if ENABLE_BATT_LED
     battery_led_init();
 #endif
 
 #if !ENABLE_SERIAL
-    if (watchdog_caused_reboot()) {
+    if (port::watchdog_caused_reboot()) {
         printf("Rebooted by Watchdog!\n");
         // 当崩溃重启以后，闪三下灯
         for (int i = 0; i < 6; i++) {
             if (i % 2 == 0) {
-                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
+                port::led_set(true);
             } else {
-                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+                port::led_set(false);
             }
-            sleep_ms(500);
+            port::delay_ms(500);
         }
     } else {
         printf("Clean boot\n");
@@ -346,7 +366,7 @@ int main() {
 #endif
 
     // Initialize the critical section for the report buffer
-    critical_section_init(&report_cs);
+    report_cs.init();
     wake_init();
 
     config_load();
@@ -358,14 +378,15 @@ int main() {
     audio_init();
 
 #if !ENABLE_SERIAL
-    watchdog_enable(1000, true);
+    port::watchdog_enable(1000);
 #endif
 
     while (1) {
 #if !ENABLE_SERIAL
-        watchdog_update();
+        port::watchdog_update();
 #endif
-        cyw43_arch_poll();
+        port::bt_transport_poll();
+        bt_task();
         tud_task();
         wake_task();
         audio_loop();

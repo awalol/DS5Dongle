@@ -2,13 +2,13 @@
 // DualSense Edge profile support. See dse.h for the protocol overview.
 //
 
+#include "port/port.h"
 #include "dse.h"
 #include "bt.h"
 #include <cstdio>
 #include <cstring>
 #include <vector>
 #include <unordered_map>
-#include "pico/time.h"
 
 // Provided by bt.cpp
 extern std::unordered_map<uint8_t, std::vector<uint8_t> > feature_data;
@@ -72,7 +72,7 @@ void dse_on_connect() {
     unlock[1] = 0x01;
     set_feature_data(0x80, unlock, sizeof(unlock));
     // 3) Caller connects USB immediately. Gate profile reads until ready.
-    unlock_started_ms = to_ms_since_boot(get_absolute_time());
+    unlock_started_ms = port::now_ms();
     unlock_phase = 1;
     profiles_ready = false;
 }
@@ -88,13 +88,13 @@ void dse_on_control_packet(const uint8_t *packet, uint16_t size) {
 
 void dse_on_profile_write(uint8_t reportId) {
     if (reportId >= 0x60 && reportId <= 0x62) {
-        profile_written_ms = to_ms_since_boot(get_absolute_time());
+        profile_written_ms = port::now_ms();
         post_save_round = 0;
     }
 }
 
 void dse_task() {
-    const uint32_t now = to_ms_since_boot(get_absolute_time());
+    const uint32_t now = port::now_ms();
     const uint16_t cid = bt_control_cid();
 
     // Paced prefetch sequencer: one profile GET per 80ms.

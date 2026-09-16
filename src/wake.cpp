@@ -2,6 +2,7 @@
 // Created by awalol on 2026/4/30.
 //
 
+#include "port/port.h"
 #include "wake.h"
 
 #ifdef ENABLE_WAKE_HID
@@ -11,8 +12,6 @@
 #include "bt.h"
 #include "tusb.h"
 #include "device/dcd.h"
-#include "pico/sync.h"
-#include "pico/time.h"
 #include "ps_shortcut.h"
 #include "config.h"
 
@@ -61,7 +60,7 @@ typedef enum {
     WAKE_DONE,
 } wake_state_t;
 
-static critical_section_t wake_cs;
+static port::CriticalSection wake_cs;
 static volatile bool host_suspended = false;
 static volatile bool host_resumed_event = false;
 static wake_state_t state = WAKE_IDLE;
@@ -79,7 +78,7 @@ static volatile uint64_t reconnect_until_us = 0;
 
 static void enter_state(wake_state_t s) {
     state = s;
-    state_entered_us = time_us_64();
+    state_entered_us = port::now_us();
 }
 
 static void request_host_wake(const char *reason) {
@@ -95,16 +94,16 @@ static void request_host_wake(const char *reason) {
     }
 
     if (ok) {
-        critical_section_enter_blocking(&wake_cs);
+        wake_cs.enter();
         state = WAKE_REQUESTED;
-        state_entered_us = time_us_64();
-        critical_section_exit(&wake_cs);
+        state_entered_us = port::now_us();
+        wake_cs.exit();
         WAKE_DBG("%s -> REQUESTED", reason);
     }
 #ifdef WAKE_DEBUG
     else {
         static uint64_t last_log = 0;
-        const uint64_t now = time_us_64();
+        const uint64_t now = port::now_us();
         if (now - last_log > 5000000) {
             WAKE_DBG("%s, tud_remote_wakeup()=0 (USB bus not in suspend) -- 5s heartbeat", reason);
             last_log = now;
@@ -114,13 +113,13 @@ static void request_host_wake(const char *reason) {
 }
 
 void wake_init(void) {
-    critical_section_init(&wake_cs);
+    wake_cs.init();
 }
 
 // Called right before a deliberate USB reconnect (FUNC_RECONNECT): arm a grace window so the
 // suspend the reconnect causes is ignored, and drop any already-pending disconnect.
 void wake_note_usb_reconnect(void) {
-    reconnect_until_us = time_us_64() + WAKE_RECONNECT_GRACE_US;
+    reconnect_until_us = port::now_us() + WAKE_RECONNECT_GRACE_US;
     suspend_at_us = 0;
 }
 
@@ -130,7 +129,7 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     // A deliberate Reconnect USB (FUNC_RECONNECT) tears the bus down and back up, which looks
     // like a suspend but is not a host sleep -- ignore it so it cannot disconnect the controller.
     // See wake_note_usb_reconnect().
-    if (time_us_64() < reconnect_until_us) {
+    if (port::now_us() < reconnect_until_us) {
         WAKE_DBG("suspend during reconnect grace -> ignored");
         return;
     }
@@ -138,7 +137,7 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     // off when its Bluetooth link is disconnected, saving battery during a real sleep/shutdown.
     // A spurious hub suspend is filtered by the debounce below, not a gate -- it resumes and
     // tud_resume_cb / tud_mount_cb cancel the pending disconnect first.
-    suspend_at_us = time_us_64();
+    suspend_at_us = port::now_us();
     host_suspended = true;
     host_resumed_event = false;
     
@@ -149,7 +148,7 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     // (e.g. Linux ignored a keystroke and left the endpoint busy forever),
     // we must abort and reset so the NEXT wake attempt can trigger.
     state = WAKE_PENDING_PRESS;
-    state_entered_us = time_us_64();
+    state_entered_us = port::now_us();
     prev_b7 = 0x08; prev_b8 = 0x00; prev_b9 = 0x00;
     key_attempts = 0;
     WAKE_DBG("-> PENDING_PRESS");
@@ -157,10 +156,10 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
 
 void wake_on_bt_connect(void) {
     if (!get_config().enable_wake) return;
-    critical_section_enter_blocking(&wake_cs);
+    wake_cs.enter();
     const bool should_wake = host_suspended &&
         (state == WAKE_IDLE || state == WAKE_DONE || state == WAKE_PENDING_PRESS);
-    critical_section_exit(&wake_cs);
+    wake_cs.exit();
 
     if (should_wake) {
         request_host_wake("BT reconnect while suspended");
@@ -223,11 +222,11 @@ void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {
     const uint8_t b8 = hid_input[8];
     const uint8_t b9 = hid_input[9];
 
-    critical_section_enter_blocking(&wake_cs);
+    wake_cs.enter();
     const bool changed = (b7 != prev_b7) || (b8 != prev_b8) || (b9 != prev_b9);
     const bool armable = (state == WAKE_IDLE || state == WAKE_DONE || state == WAKE_PENDING_PRESS);
     prev_b7 = b7; prev_b8 = b8; prev_b9 = b9;
-    critical_section_exit(&wake_cs);
+    wake_cs.exit();
 
     if (changed && armable) {
         request_host_wake("button event");
@@ -235,15 +234,15 @@ void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {
 }
 
 void wake_on_bt_disconnect(void) {
-    critical_section_enter_blocking(&wake_cs);
+    wake_cs.enter();
     state = WAKE_IDLE;
     prev_b7 = 0x08; prev_b8 = 0x00; prev_b9 = 0x00;
-    critical_section_exit(&wake_cs);
+    wake_cs.exit();
     ps_shortcut_reset();
 }
 
 void wake_task(void) {
-    const uint64_t now = time_us_64();
+    const uint64_t now = port::now_us();
 
     // Commit the deferred controller disconnect once we have stayed suspended past the debounce
     // window (a genuine host sleep/shutdown). Runs regardless of enable_wake -- it is a
@@ -259,10 +258,10 @@ void wake_task(void) {
     // The wake-UP FSM below only runs when wake is enabled.
     if (!get_config().enable_wake) return;
 
-    critical_section_enter_blocking(&wake_cs);
+    wake_cs.enter();
     const wake_state_t s = state;
     const uint64_t entered = state_entered_us;
-    critical_section_exit(&wake_cs);
+    wake_cs.exit();
 
     switch (s) {
         case WAKE_IDLE:
@@ -288,15 +287,15 @@ void wake_task(void) {
                 const bool sent = tud_hid_n_report(WAKE_KBD_INSTANCE, 0, rpt, sizeof(rpt));
                 WAKE_DBG("REQUESTED: sent keydown 0x%02X -> %d", WAKE_KEYCODE_F15, (int)sent);
                 if (sent) {
-                    critical_section_enter_blocking(&wake_cs);
+                    wake_cs.enter();
                     enter_state(WAKE_KEY_DOWN);
-                    critical_section_exit(&wake_cs);
+                    wake_cs.exit();
                 }
             } else if (now - entered > WAKE_REQUEST_TIMEOUT_US) {
                 WAKE_DBG("REQUESTED timeout 5s -> DONE (no resume signaling; may have already woken)");
-                critical_section_enter_blocking(&wake_cs);
+                wake_cs.enter();
                 enter_state(WAKE_DONE);
-                critical_section_exit(&wake_cs);
+                wake_cs.exit();
             }
             return;
         }
@@ -317,9 +316,9 @@ void wake_task(void) {
             const bool sent = tud_hid_n_report(WAKE_KBD_INSTANCE, 0, up, sizeof(up));
             WAKE_DBG("KEY_DOWN: sent keyup -> %d", (int)sent);
             if (sent) {
-                critical_section_enter_blocking(&wake_cs);
+                wake_cs.enter();
                 enter_state(WAKE_KEY_UP_SENT);
-                critical_section_exit(&wake_cs);
+                wake_cs.exit();
             }
             return;
         }
@@ -348,16 +347,16 @@ void wake_task(void) {
                 WAKE_DBG("KEY_UP_SENT: retrying F15 (attempt %d/%d) -> %d",
                          (int)key_attempts + 1, (int)WAKE_KEY_ATTEMPTS, (int)sent);
                 if (sent) {
-                    critical_section_enter_blocking(&wake_cs);
+                    wake_cs.enter();
                     enter_state(WAKE_KEY_DOWN);
-                    critical_section_exit(&wake_cs);
+                    wake_cs.exit();
                 }
             } else {
                 WAKE_DBG("KEY_UP_SENT settle done -> DONE");
-                critical_section_enter_blocking(&wake_cs);
+                wake_cs.enter();
                 enter_state(WAKE_DONE);
                 key_attempts = 0;
-                critical_section_exit(&wake_cs);
+                wake_cs.exit();
             }
             return;
         }

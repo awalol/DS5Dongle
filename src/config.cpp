@@ -10,44 +10,40 @@
 #include "bt.h"
 #include "status_gpio.h"
 #include "utils.h"
-#include "hardware/flash.h"
-#include "hardware/sync.h"
-#include "pico/btstack_flash_bank.h"
-#include "pico/cyw43_arch.h"
-#include "pico/flash.h"
+#include "port/port.h"
 
 constexpr uint32_t CONFIG_MAGIC = 0x66ccff00;
 constexpr uint16_t CONFIG_VERSION = 5; // 如果想要强制重置配置，再更新 CONFIG_VERSION。
-constexpr uint32_t CONFIG_FLASH_OFFSET = PICO_FLASH_BANK_STORAGE_OFFSET - FLASH_SECTOR_SIZE;
 static Config config{};
 bool is_dse = false;
 
 // 编译期保护
 // 判断Config结构体是否能放进flash 256bytes
-static_assert(sizeof(Config) <= FLASH_PAGE_SIZE);
-// 配置区起始地址必须按 flash sector 对齐。
-static_assert(CONFIG_FLASH_OFFSET % FLASH_SECTOR_SIZE == 0);
+static_assert(sizeof(Config) <= port::kConfigStoragePageSize);
 
 static uint32_t calc_config_crc(const Config &con) {
     return crc32(reinterpret_cast<const uint8_t *>(&con.body), sizeof(Config_body));
 }
 
-static const Config *get_xip_addr(uint32_t offset) {
-    return reinterpret_cast<const Config *>(XIP_BASE + offset);
+const Config *flash_config() {
+    return static_cast<const Config *>(port::config_storage_read());
 }
 
+// Migration for upstream #244, which moved the config off the last flash sector
+// because it collides with BTstack's link-key bank. Reads whatever the port
+// reports as the legacy location; targets with no such location return nullptr
+// and this is a no-op.
 static bool load_old_config() {
-    const auto old_addr = get_xip_addr(PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE);
+    const void *old_addr = port::config_storage_read_legacy();
+    if (old_addr == nullptr) return false;
     uint32_t magic_header;
     memcpy(&magic_header, old_addr, sizeof(uint32_t));
-    if (magic_header == CONFIG_MAGIC) {
-        printf("[Config] Trying load old sector config\n");
-        memset(&config, 0xFF, sizeof(Config)); // 先进行 0xFF 填充，确保后续缺项能够正常初始化
-        memcpy(&config, old_addr, sizeof(Config));
-        printf("[Config] Old Config loaded\n");
-        return true;
-    }
-    return false;
+    if (magic_header != CONFIG_MAGIC) return false;
+    printf("[Config] Trying load old sector config\n");
+    memset(&config, 0xFF, sizeof(Config)); // 先进行 0xFF 填充，确保后续缺项能够正常初始化
+    memcpy(&config, old_addr, sizeof(Config));
+    printf("[Config] Old Config loaded\n");
+    return true;
 }
 
 void config_valid() {
@@ -143,36 +139,21 @@ void config_valid() {
 }
 
 void config_load() {
-    memcpy(&config, get_xip_addr(CONFIG_FLASH_OFFSET), sizeof(Config));
+    memcpy(&config, flash_config(), sizeof(Config));
 
     config_valid();
 }
 
-// Runs with core1 parked (flash_safe_execute) and core0 interrupts disabled, so
-// neither core touches XIP flash while the sector is erased/programmed. Without
-// the core1 park this races the audio core and corrupts audio (buzzing).
-static void config_save_flash_op(void *param) {
-    const auto *page = static_cast<const uint8_t *>(param);
-    const uint32_t interrupts = save_and_disable_interrupts();
-    flash_range_erase(CONFIG_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-    flash_range_program(CONFIG_FLASH_OFFSET, page, FLASH_PAGE_SIZE);
-    restore_interrupts(interrupts);
-}
-
 bool config_save() {
     config.crc32 = calc_config_crc(config);
-    alignas(4) uint8_t page[FLASH_PAGE_SIZE];
-    memset(page, 0xff, sizeof(page));
-    memcpy(page, &config, sizeof(Config));
 
-    const int rc = flash_safe_execute(config_save_flash_op, page, 1000);
-    if (rc != PICO_OK) {
-        printf("[Config] config_save flash_safe_execute failed: %d\n", rc);
+    if (!port::config_storage_write(&config, sizeof(Config))) {
+        printf("[Config] config_save storage write failed\n");
         return false;
     }
 
     Config verify{};
-    memcpy(&verify, get_xip_addr(CONFIG_FLASH_OFFSET), sizeof(verify));
+    memcpy(&verify, flash_config(), sizeof(verify));
     const auto verify_crc32 = calc_config_crc(verify);
     if (verify_crc32 == config.crc32) {
         printf("[Config] Config write flash verify success\n");
@@ -200,11 +181,7 @@ void set_config(const uint8_t *new_config, const uint16_t len) {
         gpio_on_disconnect();
     }
 
-    if (config.body.disable_pico_led) {
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
-    }else {
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
-    }
+    port::led_set(!config.body.disable_pico_led);
     SetStateData state{};
     if (config.body.trigger_reduce > 0) {
         state.AllowMotorPowerLevel = 1;

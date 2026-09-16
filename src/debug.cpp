@@ -2,13 +2,13 @@
 // Created by Codex on 2026/7/7.
 //
 
+#include "port/port.h"
 #include "debug.h"
 
 #if ENABLE_DEBUG
 
 #include <cstdio>
 
-#include "pico/time.h"
 
 static constexpr uint32_t DEBUG_STACK_CANARY = 0xA5A5A5A5u;
 static constexpr uint64_t DEBUG_STACK_LOG_PERIOD_US = 5'000'000;
@@ -51,7 +51,7 @@ void debug_log_core1_stack_usage() {
     }
 
     static uint64_t next_log_us = 0;
-    const uint64_t now = time_us_64();
+    const uint64_t now = port::now_us();
     if (now < next_log_us) {
         return;
     }

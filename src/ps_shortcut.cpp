@@ -1,8 +1,8 @@
 ﻿#include "ps_shortcut.h"
+#include "port/port.h"
 #include "config.h"
 #include "tusb.h"
 #include "class/hid/hid.h"
-#include "pico/time.h"
 
 #define PS_KBD_INSTANCE 1
 
@@ -31,7 +31,7 @@ void ps_shortcut_tick(const uint8_t *data, uint16_t len) {
     if (len < 10) return;
     if (!get_config().ps_shortcut_enabled) return;
 
-    uint32_t now = to_ms_since_boot(get_absolute_time());
+    uint32_t now = port::now_ms();
     bool raw_ps = (data[9] & 0x01) != 0;
 
     if (raw_ps) {

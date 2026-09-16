@@ -27,10 +27,17 @@ void bt_set_scan_idle();
 void bt_set_scan_active();
 void dse_unlock_task();
 bool bt_dse_profiles_ready();
+// Periodic hook; call from the main loop alongside the other *_task()s.
+void bt_task();
+
 void bt_write(const uint8_t *data, uint16_t len);
 void bt_get_signal_strength(int8_t *rssi);
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
+
+// Remember what the host last asked the lightbar to be, so the ResetLights
+// pulse can re-apply that rather than overriding it with the firmware default.
+void bt_note_host_led(uint8_t r, uint8_t g, uint8_t b);
 void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len);
 void bt_inquiring_led();
 // BOOTSEL button actions, dispatched from button_functions.cpp.

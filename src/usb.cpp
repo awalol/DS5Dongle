@@ -6,7 +6,6 @@
 
 #include "bt.h"
 #include "tusb.h"
-#include "bsp/board_api.h"
 #include "config.h"
 #include "utils.h"
 

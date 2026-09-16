@@ -2,13 +2,12 @@
 // Low-battery LED indicator. See battery_led.h.
 //
 
+#include "port/port.h"
 #include "battery_led.h"
 
 #include <cstdint>
 
 #include "config.h"
-#include "pico/cyw43_arch.h"
-#include "pico/time.h"
 
 extern uint8_t interrupt_in_data[63];
 
@@ -34,7 +33,7 @@ void battery_led_init(void) {
 }
 
 void battery_led_note_report(void) {
-    last_report_us = time_us_64();
+    last_report_us = port::now_us();
 }
 
 void battery_led_on_disconnect(void) {
@@ -46,11 +45,11 @@ void battery_led_on_disconnect(void) {
     led_state = false;
     last_report_us = 0;
     last_toggle_us = 0;
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+    port::led_set(false);
 }
 
 void battery_led_tick(void) {
-    const uint64_t now = time_us_64();
+    const uint64_t now = port::now_us();
     if (last_report_us == 0 || (now - last_report_us) >= REPORT_STALE_US) {
         // No fresh data — bt.cpp owns the LED while disconnected. If we
         // were mid-blink when the report went stale, force the LED off
@@ -58,7 +57,7 @@ void battery_led_tick(void) {
         if (blinking) {
             blinking = false;
             led_state = false;
-            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+            port::led_set(false);
         }
         return;
     }
@@ -74,18 +73,18 @@ void battery_led_tick(void) {
             blinking = true;
             led_state = true;
             last_toggle_us = now;
-            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
+            port::led_set(true);
             return;
         }
         if ((now - last_toggle_us) >= BLINK_PERIOD_US) {
             led_state = !led_state;
             last_toggle_us = now;
-            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_state);
+            port::led_set(led_state);
         }
     } else if (blinking) {
         blinking = false;
         // Battery recovered or now charging — restore steady-state LED per the user
         // preference flag (LED off when disabled, otherwise the bt.cpp connected = on state).
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, !get_config().disable_pico_led);
+        port::led_set(!get_config().disable_pico_led);
     }
 }

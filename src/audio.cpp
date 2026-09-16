@@ -8,6 +8,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+#include <atomic>
+#include "port/port.h"
 #include "audio.h"
 #include "bt.h"
 #if ENABLE_DEBUG
@@ -20,9 +22,6 @@
 #include <cstdio>
 #include "opus.h"
 #include "utils.h"
-#include "pico/multicore.h"
-#include "pico/flash.h"
-#include "pico/util/queue.h"
 #include "config.h"
 
 #define INPUT_CHANNELS    4
@@ -44,13 +43,17 @@ static WDL_Resampler resampler;
 extern uint8_t reportSeqCounter;
 extern uint8_t packetCounter;
 static bool plug_headset = false;
-static bool mic_active = false; // host has opened the mic IN interface (alt != 0)
+// Written on the main task (set_mic_active), read on the core-1 audio worker.
+// Genuinely concurrent on both targets -- two real cores -- so not a plain bool.
+static std::atomic<bool> mic_active{false}; // host has opened the mic IN interface (alt != 0)
 alignas(8) static uint32_t audio_core1_stack[7000];
-queue_t audio_fifo; // raw pcm data
-queue_t mic_fifo;
-queue_t mic_decode_fifo;
-queue_t audio_spk_fifo; // opus data
-queue_t haptics_fifo;
+port::Queue audio_fifo; // raw pcm data
+port::Queue mic_fifo;
+port::Queue mic_decode_fifo;
+port::Queue audio_spk_fifo; // opus data
+// Incremented on the audio worker, drained by the main task for reporting.
+static volatile uint32_t audio_spk_overrun_count = 0;
+port::Queue haptics_fifo;
 
 struct audio_raw_element {
     float data[512 * 2];
@@ -99,18 +102,47 @@ void update_mic_status() {
     bt_write(pkt, sizeof(pkt));
 }
 
-void __not_in_flash_func(audio_bt_task)() {
+#if defined(DS5_AUDIO_STATS)
+// Per-stage counters for the speaker path, so a silent speaker can be pinned to
+// a stage instead of guessed at. The chain is:
+//   USB iso OUT -> audio_fifo -> speaker_proc (core 1, resample+opus)
+//                             -> audio_spk_fifo -> audio_bt_task -> BT
+// Printed once a second, and only while something is moving, so an idle console
+// stays readable.
+static uint32_t stat_usb_bytes = 0;    // bytes taken off the USB OUT endpoint
+static uint32_t stat_fifo_drop = 0;    // dropped because audio_fifo was full
+static uint32_t stat_opus_frames = 0;  // opus frames produced on core 1
+static uint32_t stat_bt_pkts = 0;      // 0x32 reports handed to bt_write()
+static uint32_t stat_bt_with_audio = 0;// ...of those, ones carrying speaker data
+
+static void audio_stats_tick() {
+    static uint32_t last_ms = 0;
+    static uint32_t last_total = 0;
+    const uint32_t now = port::now_ms();
+    if (now - last_ms < 1000) return;
+    last_ms = now;
+    const uint32_t total = stat_usb_bytes + stat_bt_pkts;
+    if (total == last_total) return;
+    last_total = total;
+    printf("[AUDIO] usb=%luB drop=%lu opus=%lu bt=%lu (with audio %lu)\n",
+           (unsigned long) stat_usb_bytes, (unsigned long) stat_fifo_drop,
+           (unsigned long) stat_opus_frames, (unsigned long) stat_bt_pkts,
+           (unsigned long) stat_bt_with_audio);
+}
+#endif
+
+void PORT_FAST_FUNC(audio_bt_task)() {
     const Config_body &cfg = get_config();
     const bool mic_enabled = mic_active && cfg.mic_select != 3;
 #if !DISABLE_SPEAKER_PROC
     const bool speaker_enabled = cfg.speaker_select != 3;
 #endif
 
-    if (queue_get_level(&haptics_fifo) < 2) {
+    if (haptics_fifo.level() < 2) {
         return;
     }
 #if !DISABLE_SPEAKER_PROC
-    if (speaker_enabled && queue_get_level(&audio_spk_fifo) < 2) {
+    if (speaker_enabled && audio_spk_fifo.level() < 2) {
         return;
     }
 #endif
@@ -136,13 +168,13 @@ void __not_in_flash_func(audio_bt_task)() {
     pkt[10] = 0x12 | 1 << 6 | 1 << 7;
     pkt[11] = SAMPLE_SIZE;
     static haptics_element haptics_pb{};
-    if (queue_get_level(&haptics_fifo) >= 2) {
-        if (queue_try_remove(&haptics_fifo, &haptics_pb)) {
+    if (haptics_fifo.level() >= 2) {
+        if (haptics_fifo.try_remove(&haptics_pb)) {
             memcpy(pkt + 12, haptics_pb.data,SAMPLE_SIZE);
         } else {
             printf("[Audio] Warning: Haptics queue remove failed\n");
         }
-        if (queue_try_remove(&haptics_fifo, &haptics_pb)) {
+        if (haptics_fifo.try_remove(&haptics_pb)) {
             memcpy(pkt + 12 + SAMPLE_SIZE, haptics_pb.data,SAMPLE_SIZE);
         } else {
             printf("[Audio] Warning: Haptics queue remove failed\n");
@@ -156,13 +188,13 @@ void __not_in_flash_func(audio_bt_task)() {
             ) ? 0x16 : 0x13) | 1 << 6 | 1 << 7;
         pkt[141] = SPEAKER_OPUS_SIZE;
         static audio_spk_element spk_pb{};
-        if (queue_get_level(&audio_spk_fifo) >= 2) {
-            if (queue_try_remove(&audio_spk_fifo, &spk_pb)) {
+        if (audio_spk_fifo.level() >= 2) {
+            if (audio_spk_fifo.try_remove(&spk_pb)) {
                 memcpy(pkt + 142, spk_pb.data,SPEAKER_OPUS_SIZE);
             } else {
                 printf("[Audio] Warning: Speaker queue remove failed\n");
             }
-            if (queue_try_remove(&audio_spk_fifo, &spk_pb)) {
+            if (audio_spk_fifo.try_remove(&spk_pb)) {
                 memcpy(pkt + 142 + SPEAKER_OPUS_SIZE, spk_pb.data,SPEAKER_OPUS_SIZE);
             } else {
                 printf("[Audio] Warning: Speaker queue remove failed\n");
@@ -170,10 +202,26 @@ void __not_in_flash_func(audio_bt_task)() {
         }
     }
 #endif
+#if defined(DS5_AUDIO_STATS)
+    ++stat_bt_pkts;
+    if (pkt[141] == SPEAKER_OPUS_SIZE) ++stat_bt_with_audio;
+#endif
     bt_write(pkt, sizeof(pkt));
 }
 
-void __not_in_flash_func(audio_loop)() {
+void PORT_FAST_FUNC(audio_loop)() {
+#if defined(DS5_AUDIO_STATS)
+    audio_stats_tick();
+#endif
+    // Surface the worker's overrun counter from here, where printf is allowed.
+    static uint32_t reported_spk_overruns = 0;
+    const uint32_t spk_overruns = audio_spk_overrun_count;
+    if (spk_overruns != reported_spk_overruns) {
+        printf("[Audio] audio_spk_fifo overruns: %lu\n",
+               (unsigned long) (spk_overruns - reported_spk_overruns));
+        reported_spk_overruns = spk_overruns;
+    }
+
     const Config_body &cfg = get_config();
     const bool mic_enabled = mic_active && cfg.mic_select != 3;
     const bool speaker_enabled = cfg.speaker_select != 3;
@@ -181,7 +229,7 @@ void __not_in_flash_func(audio_loop)() {
     /* 
     // Mic playback: drain decoded mic PCM into the USB IN endpoint
     static mic_decode_element mic_pb{};
-    if (queue_try_remove(&mic_decode_fifo, &mic_pb)) {
+    if (mic_decode_fifo.try_remove(&mic_pb)) {
         if (mic_enabled) {
             // The controller mic is mono, but the USB descriptor presents a 2-channel
             // mic (matching the real DS5) so Windows doesn't conflict with its cached
@@ -223,7 +271,7 @@ void __not_in_flash_func(audio_loop)() {
         
         while (tx_fifo && tu_fifo_remaining(tx_fifo) >= 192) {
             if (!has_active_frame) {
-                if (queue_try_remove(&mic_decode_fifo, &active_mic_frame)) {
+                if (mic_decode_fifo.try_remove(&active_mic_frame)) {
                     has_active_frame = true;
                     active_frame_offset = 0;
                 } else {
@@ -273,6 +321,9 @@ void __not_in_flash_func(audio_loop)() {
 
     int16_t raw[192];
     uint32_t bytes_read = tud_audio_read(raw, sizeof(raw)); // 每次读入 384 bytes
+#if defined(DS5_AUDIO_STATS)
+    stat_usb_bytes += bytes_read;
+#endif
     int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
     if (frames == 0) {
         return;
@@ -288,7 +339,7 @@ void __not_in_flash_func(audio_loop)() {
 #if !DISABLE_SPEAKER_PROC
     if (!speaker_enabled) {
         audio_buf_pos = 0;
-        while (queue_try_remove(&audio_fifo, NULL)) {
+        while (audio_fifo.try_remove(NULL)) {
         }
     }
 #endif
@@ -300,10 +351,13 @@ void __not_in_flash_func(audio_loop)() {
             if (audio_buf_pos == 512 * 2) {
                 static audio_raw_element element{};
                 memcpy(element.data, audio_buf, 512 * 2 * 4);
-                if (queue_is_full(&audio_fifo)) {
-                    queue_try_remove(&audio_fifo, NULL);
+                if (audio_fifo.is_full()) {
+                    audio_fifo.try_remove(NULL);
                 }
-                if (!queue_try_add(&audio_fifo, &element)) {
+                if (!audio_fifo.try_add(&element)) {
+#if defined(DS5_AUDIO_STATS)
+                    ++stat_fifo_drop;
+#endif
                     printf("[Audio] Warning: audio_fifo add failed\n");
                 }
                 audio_buf_pos = 0;
@@ -334,10 +388,10 @@ void __not_in_flash_func(audio_loop)() {
         }
         static haptics_element element{};
         memcpy(element.data, haptic_buf,SAMPLE_SIZE);
-        if (queue_is_full(&haptics_fifo)) {
-            queue_try_remove(&haptics_fifo, NULL);
+        if (haptics_fifo.is_full()) {
+            haptics_fifo.try_remove(NULL);
         }
-        if (!queue_try_add(&haptics_fifo, &element)) {
+        if (!haptics_fifo.try_add(&element)) {
             printf("[Audio] Warning: haptics_fifo add failed\n");
         }
         haptic_buf_pos = 0;
@@ -358,7 +412,7 @@ void audio_init() {
     resampler.SetRates(48000, 3000);
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 48, 4);
-    queue_init(&haptics_fifo, sizeof(haptics_element), 2);
+    haptics_fifo.init(sizeof(haptics_element), 2);
     // Mic queues are read from audio_loop on core0 every iteration, so they
     // must exist regardless of the speaker-proc build flag.
     //
@@ -366,19 +420,19 @@ void audio_init() {
     // Increased microphone queues to depth 8 (~80ms buffer size).
     // This absorbs initial Opus encoder/decoder warm-up delays and mitigates
     // startup crackling/stuttering under Core 1 task schedulers.
-    // queue_init(&mic_fifo, sizeof(mic_element), 2);
-    // queue_init(&mic_decode_fifo, sizeof(mic_decode_element), 2);
-    queue_init(&mic_fifo, sizeof(mic_element), 8);
-    queue_init(&mic_decode_fifo, sizeof(mic_decode_element), 8);
+    // mic_fifo.init(sizeof(mic_element), 2);
+    // mic_decode_fifo.init(sizeof(mic_decode_element), 2);
+    mic_fifo.init(sizeof(mic_element), 8);
+    mic_decode_fifo.init(sizeof(mic_decode_element), 8);
 #if !DISABLE_SPEAKER_PROC
-    queue_init(&audio_fifo, sizeof(audio_raw_element), 2);
-    queue_init(&audio_spk_fifo, sizeof(audio_spk_element), 2);
+    audio_fifo.init(sizeof(audio_raw_element), 2);
+    audio_spk_fifo.init(sizeof(audio_spk_element), 2);
 #if ENABLE_DEBUG
     // 通常 stack 最大使用 25836 bytes 即 stack[6459]
     debug_fill_core1_stack_watermark(audio_core1_stack,
                                      sizeof(audio_core1_stack) / sizeof(audio_core1_stack[0]));
 #endif
-    multicore_launch_core1_with_stack(core1_entry, audio_core1_stack, sizeof(audio_core1_stack));
+    port::launch_worker(core1_entry, audio_core1_stack, sizeof(audio_core1_stack));
 #endif
 }
 
@@ -389,9 +443,9 @@ static WDL_Resampler resampler_audio;
 // Speaker path: USB OUT PCM (core0 audio_fifo) -> resample -> opus encode ->
 // opus_buf for the haptics/speaker BT report. Non-blocking so core1 can also
 // service the mic path. Kept in RAM to remove XIP miss latency from the loop.
-static void __not_in_flash_func(speaker_proc)() {
+static void PORT_FAST_FUNC(speaker_proc)() {
     static audio_raw_element audio_element{};
-    if (!queue_try_remove(&audio_fifo, &audio_element)) {
+    if (!audio_fifo.try_remove(&audio_element)) {
         return;
     }
     if (get_config().speaker_select == 3) {
@@ -420,19 +474,31 @@ static void __not_in_flash_func(speaker_proc)() {
     if (encoded_len < (int) sizeof(spk_ele.data)) {
         memset(spk_ele.data + encoded_len, 0, sizeof(spk_ele.data) - encoded_len);
     }
-    if (queue_is_full(&audio_spk_fifo)) {
-        queue_try_remove(&audio_spk_fifo, NULL);
-    }
-    if (!queue_try_add(&audio_spk_fifo, &spk_ele)) {
-        printf("[Audio] Warning: audio_spk_fifo add failed\n");
+    // Deliberately NOT dropping the oldest here. Doing so would make this a
+    // second consumer of audio_spk_fifo, racing audio_bt_task()'s paired
+    // removes on the other core: its level() >= 2 check would pass, then this
+    // drop would steal one, and the second remove would fail and ship a zeroed
+    // Opus frame -- a click. Overflow now drops the newest frame instead, which
+    // only happens when the pipeline is already behind.
+#if defined(DS5_AUDIO_STATS)
+    ++stat_opus_frames;
+#endif
+    if (!audio_spk_fifo.try_add(&spk_ele)) {
+        // Counted, not printed. This runs on the audio worker, whose whole
+        // contract is that it never blocks -- and the console is a blocking
+        // UART behind a mutex the main task holds constantly, so a line here
+        // costs milliseconds of a 10 ms frame budget at precisely the moment
+        // the FIFO is already overflowing. Printing would deepen the overrun
+        // it is reporting. audio_loop() reports the delta from the main task.
+        ++audio_spk_overrun_count;
     }
 }
 
 // Mic path: opus packets from the controller (core0 mic_fifo) -> opus decode ->
 // PCM into mic_decode_fifo for audio_loop to push to the USB IN endpoint.
-static void __not_in_flash_func(mic_proc)() {
+static void PORT_FAST_FUNC(mic_proc)() {
     static mic_element mic_packet{};
-    if (!queue_try_remove(&mic_fifo, &mic_packet)) {
+    if (!mic_fifo.try_remove(&mic_packet)) {
         return;
     }
     if (!mic_active || get_config().mic_select == 3) {
@@ -450,24 +516,24 @@ static void __not_in_flash_func(mic_proc)() {
         return;
     }
     decode_element.len = decoded_samples * MIC_CHANNELS * sizeof(int16_t);
-    if (queue_is_full(&mic_decode_fifo)) {
-        queue_try_remove(&mic_decode_fifo, NULL);
+    if (mic_decode_fifo.is_full()) {
+        mic_decode_fifo.try_remove(NULL);
     }
-    queue_try_add(&mic_decode_fifo, &decode_element);
+    mic_decode_fifo.try_add(&decode_element);
 }
 
-void __not_in_flash_func(core1_entry)() {
+void PORT_FAST_FUNC(core1_entry)() {
     // Register core1 as a flash-safe victim so core0's flash_safe_execute() really
     // parks this core while flash is accessed, instead of letting it fault on XIP.
     // Used by config_save() (flash erase/program) and the BOOTSEL poll (which briefly
     // floats QSPI CSn) - the latter makes polling BOOTSEL safe while audio streams on
     // core1. Requires PICO_FLASH_ASSUME_CORE1_SAFE=0.
-    flash_safe_execute_core_init();
+    port::worker_flash_safe_init();
     
     // Allow Core 0 to fully initialize Bluetooth and USB stacks before Core 1 starts processing
     // otherwise the dongle could shut down at initialization
     // TODO: Search for initialization callbacks of core 0
-    sleep_ms(300);
+    port::delay_ms(300);
 
     int error = 0;
     encoder = opus_encoder_create(48000, 2,OPUS_APPLICATION_AUDIO, &error);
@@ -494,11 +560,11 @@ void __not_in_flash_func(core1_entry)() {
         // Only enter processing if data is actually waiting.
         // This avoids constantly acquiring queue locks (spinlocks) when idle,
         // which would otherwise thrash the RP2350 system bus and starve Core 0.
-        if (queue_get_level(&audio_fifo) > 0) {
+        if (audio_fifo.level() > 0) {
             speaker_proc();
             work_done = true;
         }
-        if (queue_get_level(&mic_fifo) > 0) {
+        if (mic_fifo.level() > 0) {
             mic_proc();
             work_done = true;
         }
@@ -506,7 +572,7 @@ void __not_in_flash_func(core1_entry)() {
         // If both queues are empty, we can safely sleep.
         // This prevents 100% CPU usage while maintaining sub-millisecond response times.
         if (!work_done) {
-            sleep_us(10); 
+            port::delay_us(10); 
         }
     }
 }
@@ -514,13 +580,13 @@ void __not_in_flash_func(core1_entry)() {
 // data points at the opus mic payload, len is the bytes available there.
 // In RAM (consistent with the BT-receive path) and validates len so a short
 // or malformed report can't over-read past the packet buffer.
-void __not_in_flash_func(mic_add_queue)(uint8_t *data, uint16_t len) {
+void PORT_FAST_FUNC(mic_add_queue)(uint8_t *data, uint16_t len) {
     if (!mic_active || get_config().mic_select == 3) return;
     if (len < MIC_OPUS_SIZE) return;
     static mic_element mic_packet{};
     memcpy(mic_packet.data, data, MIC_OPUS_SIZE);
-    if (queue_is_full(&mic_fifo)) {
-        queue_try_remove(&mic_fifo, NULL);
+    if (mic_fifo.is_full()) {
+        mic_fifo.try_remove(NULL);
     }
-    queue_try_add(&mic_fifo, &mic_packet);
+    mic_fifo.try_add(&mic_packet);
 }

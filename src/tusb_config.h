@@ -130,6 +130,10 @@
 
 // UAC1 Full-Speed endpoint size
 #define CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE            48000
+// _is_highspeed stays false even on the high-speed target: the isochronous
+// endpoints keep a 1 ms service interval there (bInterval 4 = 8 microframes),
+// so the bytes carried per service interval are the full-speed figure. Passing
+// true would size them per 125 us microframe and starve the audio path.
 #define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT     TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX)
 #define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN      TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX)
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX          CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT

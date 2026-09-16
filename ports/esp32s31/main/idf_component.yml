@@ -1,0 +1,14 @@
+dependencies:
+  idf:
+    version: ">=6.0"
+  # Addressable RGB status LED on GPIO60 (see board_esp32s31.h).
+  espressif/led_strip:
+    version: "^3.0.0"
+  # Raw TinyUSB, NOT espressif/esp_tinyusb. The wrapper ships its own
+  # tusb_config.h on a public include path, which shadows the firmware's
+  # src/tusb_config.h and silently disables the device stack. This firmware
+  # supplies its own descriptors, config and tud_* callbacks, so it wants
+  # TinyUSB unwrapped. 0.21.0 matches the 4-argument TUD_AUDIO_EP_SIZE the
+  # pinned Pico SDK TinyUSB uses.
+  espressif/tinyusb:
+    version: "~0.21.0"

@@ -49,10 +49,20 @@ on:
         required: false
         type: boolean
         default: false
+      esp32s31:
+        description: Also build the ESP32-S31 merged flash image
+        required: false
+        type: boolean
+        default: false
 
 env:
   PICO_SDK_REF: 2.3.0
   TINYUSB_REF: 2d56dc533e45e4e91b15e93fdab5e22e964f328d
+  # esp32s31 is a preview target: it exists only on ESP-IDF master, which has no
+  # tagged release and no versioned container image. Pinned by commit for the same
+  # reason PICO_SDK_REF and TINYUSB_REF are -- floating on espressif/idf:latest
+  # broke this job when master changed under it.
+  IDF_REF: 08e0d30a74ad0bfd5a34933142b80f45619ee410
   PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
   ARM_TOOLCHAIN_VERSION: 15.2.rel1
   ARM_TOOLCHAIN_URL: https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.2.rel1/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi.tar.xz
@@ -289,6 +299,95 @@ jobs:
         with:
           name: ${{ matrix.artifact }}${{ steps.firmware-meta.outputs.asset_suffix }}
           path: artifacts/${{ matrix.artifact }}${{ steps.firmware-meta.outputs.asset_suffix }}.uf2
+          archive: false
+          if-no-files-found: error
+
+  esp32s31:
+    name: Build ESP32-S31 firmware
+    if: inputs.esp32s31
+    runs-on: ubuntu-latest
+    env:
+      IDF_PATH: ${{ github.workspace }}/esp-idf
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.repo == '' && github.repository || inputs.repo }}
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+
+      - name: Resolve firmware metadata
+        id: firmware-meta
+        shell: bash
+        env:
+          IN_VER: ${{ inputs.version }}
+          IN_ASSET_SUFFIX: ${{ inputs.asset_suffix }}
+          IN_UPLOAD_TAG: ${{ inputs.upload_tag }}
+        run: |
+          v="$IN_VER"
+          if printf '%s' "$v" | grep -qE '^[0-9a-f]{40}$'; then
+            v="${v:0:7}"
+          fi
+          echo "FW_VER=$v" >> "$GITHUB_ENV"
+
+          asset_suffix="$IN_ASSET_SUFFIX"
+          if [ -z "$asset_suffix" ] && [ -z "$IN_UPLOAD_TAG" ]; then
+            asset_suffix="-$(git rev-parse --short=7 HEAD)"
+          fi
+          echo "asset_suffix=$asset_suffix" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ESP-IDF and tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/esp-idf
+            ~/.espressif
+          key: ${{ runner.os }}-idf-${{ env.IDF_REF }}-esp32s31
+
+      - name: Install ESP-IDF at the pinned ref
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git wget flex bison gperf python3 python3-pip \
+            python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util
+
+          # Fetch just the pinned commit rather than the full history.
+          if [ ! -d "$IDF_PATH/.git" ]; then
+            git init "$IDF_PATH"
+            git -C "$IDF_PATH" remote add origin https://github.com/espressif/esp-idf.git
+            git -C "$IDF_PATH" fetch --depth 1 origin "$IDF_REF"
+            git -C "$IDF_PATH" checkout --detach FETCH_HEAD
+            git -C "$IDF_PATH" submodule update --init --depth 1 --recursive
+          fi
+          "$IDF_PATH/install.sh" esp32s31
+
+      - name: Build ESP32-S31 firmware
+        shell: bash
+        env:
+          ASSET_SUFFIX: ${{ steps.firmware-meta.outputs.asset_suffix }}
+        run: |
+          . "$IDF_PATH/export.sh"
+
+          VERSION_ARG=()
+          [ -n "${FW_VER:-}" ] && VERSION_ARG=(-DVERSION="$FW_VER")
+
+          # --preview is required: esp32s31 is not a released target.
+          # The target itself comes from ports/esp32s31/sdkconfig.defaults.
+          idf.py --preview -C ports/esp32s31 "${VERSION_ARG[@]}" build
+
+          # Single image at offset 0, so flashing needs no per-file offsets.
+          idf.py --preview -C ports/esp32s31 merge-bin \
+            -o ds5-bridge-esp32s31-merged.bin
+
+          mkdir -p artifacts
+          cp ports/esp32s31/build/ds5-bridge-esp32s31-merged.bin \
+             "artifacts/ds5-bridge-esp32s31-merged${ASSET_SUFFIX}.bin"
+
+      - name: Upload ESP32-S31 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ds5-bridge-esp32s31-merged${{ steps.firmware-meta.outputs.asset_suffix }}
+          path: artifacts/ds5-bridge-esp32s31-merged${{ steps.firmware-meta.outputs.asset_suffix }}.bin
           archive: false
           if-no-files-found: error
 

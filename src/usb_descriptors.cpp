@@ -23,7 +23,7 @@
  *
  */
 
-#include "bsp/board_api.h"
+#include "port/port.h"
 #include "tusb.h"
 #include "config.h"
 
@@ -136,6 +136,25 @@ uint8_t const *tud_descriptor_device_cb(void) {
 //--------------------------------------------------------------------+
 // Configuration Descriptor
 //--------------------------------------------------------------------+
+
+// Endpoint service interval, in milliseconds, expressed the way the descriptor
+// wants it for the speed we actually enumerate at.
+//
+// bInterval means different things per speed: full speed counts 1 ms frames
+// directly, high speed is an exponent (2^(bInterval-1) microframes of 125 us).
+// A literal 1 in a high-speed descriptor asks for 8x the intended rate. Periods
+// that are not a power of two round down, polling slightly more often.
+static constexpr uint8_t ep_interval(const unsigned period_ms) {
+#if TUD_OPT_HIGH_SPEED
+    const unsigned microframes = period_ms * 8u;
+    uint8_t b = 1;
+    while ((1u << b) <= microframes) ++b;
+    return b;
+#else
+    return static_cast<uint8_t>(period_ms);
+#endif
+}
+
 uint8_t descriptor_configuration[] = {
     // --- CONFIGURATION DESCRIPTOR ---
     0x09, // bLength
@@ -296,7 +315,7 @@ uint8_t descriptor_configuration[] = {
     0x01, // bEndpointAddress: OUT EP1
     0x09, // bmAttributes: Isochronous, Adaptive
     0x88, 0x01, // wMaxPacketSize: 392 bytes
-    0x01, // bInterval: 1
+    ep_interval(1), // bInterval: 1 ms service interval
     0x00, // bRefresh
     0x00, // bSynchAddress
 
@@ -355,7 +374,7 @@ uint8_t descriptor_configuration[] = {
     0x82, // bEndpointAddress: IN EP2
     0x05, // bmAttributes: Isochronous, Asynchronous
     0xC4, 0x00, // wMaxPacketSize: 196 bytes ((48+1) samples * 2 ch * 2 bytes)
-    0x01, // bInterval: 1
+    ep_interval(1), // bInterval: 1 ms service interval
     0x00, // bRefresh
     0x00, // bSynchAddress
 
@@ -394,7 +413,7 @@ uint8_t descriptor_configuration[] = {
     0x84, // bEndpointAddress: IN EP4
     0x03, // bmAttributes: Interrupt
     0x40, 0x00, // wMaxPacketSize: 64
-    0x01, // bInterval: 1 (polling every 4ms -> 1ms)
+    ep_interval(1), // bInterval: overwritten per polling_rate_mode below
 
     // Endpoint Descriptor (HID OUT: EP3)
     0x07, // bLength
@@ -402,7 +421,7 @@ uint8_t descriptor_configuration[] = {
     0x03, // bEndpointAddress: OUT EP3
     0x03, // bmAttributes: Interrupt
     0x40, 0x00, // wMaxPacketSize: 64
-    0x01, // bInterval: 1 (polling every 4ms -> 1ms)
+    ep_interval(1), // bInterval: overwritten per polling_rate_mode below
 
 #if ENABLE_SERIAL
     // --- CDC ACM (USB Serial) ---
@@ -437,25 +456,55 @@ uint8_t descriptor_configuration[] = {
     0x87, // bEndpointAddress: IN EP7
     0x03, // bmAttributes: Interrupt
     0x08, 0x00, // wMaxPacketSize: 8 (boot keyboard report)
-    0x0A, // bInterval: 10ms
+    ep_interval(10), // bInterval: 10 ms (8 ms at high speed)
 #endif
 };
+
+#if TUD_OPT_HIGH_SPEED
+// Invoked when received GET DEVICE QUALIFIER DESCRIPTOR
+//
+// Only high-speed-capable devices answer this. TinyUSB's weak stub returns NULL
+// and stalls, which hosts tolerate but is a standards violation at high speed.
+// Fields mirror desc_device so the two cannot drift.
+uint8_t const *tud_descriptor_device_qualifier_cb(void) {
+    static tusb_desc_device_qualifier_t desc_qualifier = {
+        .bLength = sizeof(tusb_desc_device_qualifier_t),
+        .bDescriptorType = TUSB_DESC_DEVICE_QUALIFIER,
+        .bcdUSB = 0x0200,
+        .bDeviceClass = 0x00,
+        .bDeviceSubClass = 0x00,
+        .bDeviceProtocol = 0x00,
+        .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
+        .bNumConfigurations = 0x01,
+        .bReserved = 0x00,
+    };
+    desc_qualifier.bcdUSB = desc_device.bcdUSB;
+    desc_qualifier.bDeviceClass = desc_device.bDeviceClass;
+    desc_qualifier.bDeviceSubClass = desc_device.bDeviceSubClass;
+    desc_qualifier.bDeviceProtocol = desc_device.bDeviceProtocol;
+    desc_qualifier.bMaxPacketSize0 = desc_device.bMaxPacketSize0;
+    desc_qualifier.bNumConfigurations = desc_device.bNumConfigurations;
+    return reinterpret_cast<uint8_t const *>(&desc_qualifier);
+}
+#endif
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void) index; // for multiple configurations
-    auto bInterval = 0x01;
+    // Same speed-dependent encoding as the static descriptors above; these are
+    // periods in milliseconds, not raw bInterval values.
+    auto bInterval = ep_interval(1);
     switch (get_config().polling_rate_mode) {
         case 0:
-            bInterval = 0x04;
+            bInterval = ep_interval(4);
             break;
         case 1:
-            bInterval = 0x02;
+            bInterval = ep_interval(2);
             break;
         case 2:
-            bInterval = 0x01;
+            bInterval = ep_interval(1);
             break;
     }
     constexpr auto offset = CONFIG_DESC_LEN_BASE;
@@ -952,7 +1001,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             break;
 
         case STRID_SERIAL:
-            chr_count = board_usb_get_serial(_desc_str + 1, 32) + 1;
+            chr_count = port::usb_get_serial(_desc_str + 1, 32) + 1;
             _desc_str[chr_count] = '2'; // refresh windows cache (bumped for 2-ch mic)
             break;
 
@@ -986,19 +1035,11 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 //--------------------------------------------------------------------+
 // Microsoft OS 2.0 descriptors (carried via BOS).
 //
-// Why this is here: the dongle is a composite device with USB Audio Class
-// interfaces. By default Windows audio engine policy keeps USB audio devices
-// at D0 even during system S3, blocking selective-suspend for the whole
-// composite. Without selective-suspend the device never enters USB suspend,
-// so tud_remote_wakeup() never works -- breaking wake-on-PS.
-//
-// MS OS 2.0 lets us tell Windows "yes, please selective-suspend this audio
-// function": we set the registry property "SelectiveSuspendEnabled" = 1 on
-// the audio function (interface 0). This causes Windows to write
-//   HKLM\SYSTEM\CurrentControlSet\Enum\USB\<VID&PID>\<instance>
-//        \Device Parameters\SelectiveSuspendEnabled = 1
-// at enumeration time, opting our audio function in to selective suspend
-// without breaking haptics.
+// Windows audio policy keeps USB audio devices at D0 even during S3, which
+// blocks selective-suspend for the whole composite -- so the device never enters
+// USB suspend and tud_remote_wakeup() never fires, breaking wake-on-PS. Setting
+// the "SelectiveSuspendEnabled" registry property on the audio function opts it
+// back in without breaking haptics.
 //
 // Reference: "Microsoft OS 2.0 Descriptors Specification".
 //--------------------------------------------------------------------+

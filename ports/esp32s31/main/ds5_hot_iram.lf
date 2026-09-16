@@ -1,0 +1,55 @@
+# Hot-path code moved from flash to internal RAM -- the ESP-IDF counterpart of
+# the RP2350 build's relocations, same function list. noflash_text rather than
+# noflash because symbol granularity only works for text; rodata stays in flash.
+#
+# Costs 22.7 KB of DIRAM, which is shared with the heap, so anything added here
+# comes out of the allocator. Keep it to the audio/BT per-packet path -- the
+# rumble/LED path is deliberately absent, as on the Pico.
+
+[mapping:ds5_btstack_hot]
+archive: libbtstack.a
+entries:
+    # Per-packet receive: the HCI event/ACL demux and the L2CAP ACL handler.
+    hci:packet_handler (noflash_text)
+    l2cap:l2cap_acl_handler (noflash_text)
+    # TX pumps and the send paths they drive.
+    hci:hci_run (noflash_text)
+    hci:hci_send_acl_packet_fragments (noflash_text)
+    hci:hci_send_acl_packet_buffer (noflash_text)
+    l2cap:l2cap_run (noflash_text)
+    l2cap:l2cap_send (noflash_text)
+    l2cap:l2cap_send_prepared (noflash_text)
+    l2cap:l2cap_notify_channel_can_send (noflash_text)
+    l2cap:l2cap_request_can_send_now_event (noflash_text)
+    # Walked by every run of the pumps above.
+    btstack_linked_list:btstack_linked_list_iterator_init (noflash_text)
+    btstack_linked_list:btstack_linked_list_iterator_has_next (noflash_text)
+    btstack_linked_list:btstack_linked_list_iterator_next (noflash_text)
+    # Run loop poll, called from the main loop every iteration.
+    btstack_run_loop:btstack_run_loop_base_poll_data_sources (noflash_text)
+    btstack_run_loop_embedded:btstack_run_loop_embedded_execute_once (noflash_text)
+
+[mapping:ds5_tinyusb_hot]
+archive: libespressif__tinyusb.a
+entries:
+    # FIFO data path, shared by the audio and HID endpoints.
+    tusb_fifo:tu_fifo_read_n_access_mode (noflash_text)
+    tusb_fifo:tu_fifo_write_n_access_mode (noflash_text)
+    # Device task pump and per-transfer submit.
+    usbd:tud_task_ext (noflash_text)
+    usbd:usbd_edpt_xfer (noflash_text)
+    usbd:usbd_edpt_xfer_fifo (noflash_text)
+    # The ISR that drives every path below it, left in flash when the rest of
+    # the hot path moved to RAM.
+    dcd_dwc2:dcd_int_handler (noflash_text)
+    usbd:dcd_event_handler (noflash_text)
+    dcd_dwc2:dcd_edpt_xfer (noflash_text)
+    dcd_dwc2:dcd_edpt_iso_activate (noflash_text)
+    # Audio class data path, including the ISR half.
+    audio_device:tud_audio_n_read (noflash_text)
+    audio_device:tud_audio_n_write (noflash_text)
+    audio_device:audiod_xfer_isr (noflash_text)
+    # Input-report path tail, controller -> host.
+    hid_device:tud_hid_n_report (noflash_text)
+    hid_device:tud_hid_n_ready (noflash_text)
+    hid_device:hidd_xfer_cb (noflash_text)
