@@ -12,7 +12,8 @@ constexpr uint8_t SHORTCUT_TRIGGER_DOUBLE_TAP = 0xFE;
 // Chords have no sentinel to spare (trigger_b is the second button), so they mark
 // the double tap here instead.
 constexpr uint8_t SHORTCUT_FLAG_DOUBLE_TAP = 0x01;
-constexpr uint8_t SHORTCUT_FLAG_MASK = SHORTCUT_FLAG_DOUBLE_TAP;
+constexpr uint8_t SHORTCUT_FLAG_HOLD = 0x02; // Keyboard follows physical state; TAP means one button.
+constexpr uint8_t SHORTCUT_FLAG_MASK = SHORTCUT_FLAG_DOUBLE_TAP | SHORTCUT_FLAG_HOLD;
 constexpr uint32_t SHORTCUT_TAP_WINDOW_MS = 250;
 
 enum ShortcutAction : uint8_t {
@@ -45,9 +46,11 @@ bool shortcut_slot_valid(const ButtonShortcut &shortcut);
 #ifdef ENABLE_WAKE_HID
 void button_shortcut_tick(const USBGetStateData& state);
 void button_shortcut_reset();
+void button_shortcut_task();
 #else
 // No keyboard/consumer HID interface to fire into: keep the call sites clean
 // instead of sprinkling #ifdef through main.cpp and wake.cpp.
 static inline void button_shortcut_tick(const USBGetStateData&) {}
 static inline void button_shortcut_reset() {}
+static inline void button_shortcut_task() {}
 #endif

@@ -186,6 +186,7 @@ extern "C" void tud_resume_cb(void) {
 }
 
 extern "C" void tud_mount_cb(void) {
+    button_shortcut_reset();
     usb_reconfiguring = false;
     WAKE_DBG("tud_mount_cb state=%s", wake_state_name(state));
     host_suspended = false;
@@ -250,6 +251,15 @@ void wake_on_bt_disconnect(void) {
     prev_b7 = 0x08; prev_b8 = 0x00; prev_b9 = 0x00;
     critical_section_exit(&wake_cs);
     button_shortcut_reset();
+}
+
+bool wake_keyboard_busy() {
+    if (!get_config().enable_wake) return false;
+    critical_section_enter_blocking(&wake_cs);
+    const bool busy = state == WAKE_REQUESTED || state == WAKE_KEY_DOWN ||
+                      state == WAKE_KEY_UP_SENT;
+    critical_section_exit(&wake_cs);
+    return busy;
 }
 
 void wake_task(void) {

@@ -239,6 +239,7 @@ void set_button_remap(const uint8_t *new_remap, const uint16_t len) {
 }
 
 void set_shortcut(const uint8_t *new_shortcuts, const uint16_t len) {
+    button_shortcut_reset();
     constexpr auto room = sizeof(Button::shortcuts);
     const auto copy_len = len < room ? len : room;
     memcpy(storage.button.shortcuts, new_shortcuts, copy_len);

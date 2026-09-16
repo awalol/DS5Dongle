@@ -116,7 +116,8 @@ SHORTCUT_DISABLED = 0xFF
 TRIGGER_TAP = 0xFD        # src/config.h SHORTCUT_TRIGGER_TAP
 TRIGGER_DOUBLE_TAP = 0xFE # src/config.h SHORTCUT_TRIGGER_DOUBLE_TAP
 SHORTCUT_FLAG_DOUBLE_TAP = 0x01 # src/config.h SHORTCUT_FLAG_DOUBLE_TAP (chords only)
-SHORTCUT_FLAG_MASK = SHORTCUT_FLAG_DOUBLE_TAP
+SHORTCUT_FLAG_HOLD = 0x02
+SHORTCUT_FLAG_MASK = SHORTCUT_FLAG_DOUBLE_TAP | SHORTCUT_FLAG_HOLD
 SHORTCUT_ACTION_KEYBOARD = 0
 SHORTCUT_ACTION_BT_DISCONNECT = 1
 SHORTCUT_ACTION_CONSUMER = 2
@@ -624,6 +625,11 @@ def shortcut_slot_valid(shortcut):
         return False
     if flags & ~SHORTCUT_FLAG_MASK:
         return False
+    if flags & SHORTCUT_FLAG_HOLD and (
+        action != SHORTCUT_ACTION_KEYBOARD or flags & SHORTCUT_FLAG_DOUBLE_TAP
+        or trigger_b == TRIGGER_DOUBLE_TAP
+    ):
+        return False
     if trigger_b in (TRIGGER_TAP, TRIGGER_DOUBLE_TAP):
         if flags & SHORTCUT_FLAG_DOUBLE_TAP:
             return False
@@ -655,6 +661,8 @@ def print_shortcuts(button, indent="  "):
             triggers = f"{button_name(trigger_a)}+{button_name(trigger_b)}"
             if flags & SHORTCUT_FLAG_DOUBLE_TAP:
                 triggers += "*2"
+        if flags & SHORTCUT_FLAG_HOLD:
+            triggers += "@hold"
         if action == SHORTCUT_ACTION_BT_DISCONNECT:
             output = "bt_disconnect"
         elif action == SHORTCUT_ACTION_CONSUMER:
@@ -692,8 +700,13 @@ def parse_shortcut_assignment(token):
     if ":" not in definition:
         sys.exit(f"Bad shortcut '{token}', missing ':' between controller trigger and output.")
     trigger_raw, output_raw = definition.split(":", 1)
+    hold = trigger_raw.strip().lower().endswith("@hold")
+    if hold:
+        trigger_raw = trigger_raw.strip()[:-5]
+        if "*" in trigger_raw:
+            sys.exit("@hold is separate from single/double tap syntax.")
     triggers = [part.strip() for part in trigger_raw.split("+") if part.strip()]
-    flags = 0
+    flags = SHORTCUT_FLAG_HOLD if hold else 0
     if len(triggers) == 1:
         # A lone button is a tap trigger; a trailing "*2" asks for a double tap.
         name = triggers[0]
@@ -727,6 +740,8 @@ def parse_shortcut_assignment(token):
         sys.exit("A shortcut needs one button (tap trigger) or two buttons (chord).")
 
     action_name = normalize_button_name(output_raw)
+    if hold and (action_name in CONSUMER_NAMES or action_name in ("btdisconnect", "disconnect")):
+        sys.exit("@hold supports keyboard keys and keyboard shortcuts only.")
     if action_name in ("btdisconnect", "disconnect"):
         return slot, (trigger_ids[0], trigger_ids[1],
                       SHORTCUT_ACTION_BT_DISCONNECT, [0] * SHORTCUT_PAYLOAD_SIZE, flags)
@@ -815,6 +830,8 @@ def main():
   python tools/config_tool.py shortcut 3=PS+DOWN:VolumeDown
   python tools/config_tool.py shortcut 4=PS:Win+G
   python tools/config_tool.py shortcut 6=PS*2:Win+Tab
+  python tools/config_tool.py shortcut "1=Cross@hold:Space"
+  python tools/config_tool.py shortcut "2=L1@hold:Ctrl+C"
   python tools/config_tool.py shortcut 1=off""",
     )
     p_shortcut.add_argument(

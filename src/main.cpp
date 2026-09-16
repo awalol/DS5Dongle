@@ -354,6 +354,7 @@ int main() {
         cyw43_arch_poll();
         tud_task();
         wake_task();
+        button_shortcut_task();
         audio_loop();
 #if ENABLE_DEBUG
         debug_log_core1_stack_usage();

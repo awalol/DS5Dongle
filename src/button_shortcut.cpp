@@ -1,5 +1,8 @@
 #include "button_shortcut.h"
 
+#include <cstring>
+#include "usb.h"
+#include "wake.h"
 #include "bt.h"
 #include "button_utils.h"
 #include "config.h"
@@ -12,6 +15,10 @@
 bool shortcut_slot_valid(const ButtonShortcut &shortcut) {
     if (shortcut.trigger_a >= Disable) return false;
     if (shortcut.flags & ~SHORTCUT_FLAG_MASK) return false;
+    if ((shortcut.flags & SHORTCUT_FLAG_HOLD) &&
+        (shortcut.action != ShortcutActionKeyboard ||
+         (shortcut.flags & SHORTCUT_FLAG_DOUBLE_TAP) ||
+         shortcut.trigger_b == SHORTCUT_TRIGGER_DOUBLE_TAP)) return false;
     if (shortcut.trigger_b == SHORTCUT_TRIGGER_TAP ||
         shortcut.trigger_b == SHORTCUT_TRIGGER_DOUBLE_TAP) {
         // Tap slots spell their tap count out in trigger_b.
@@ -63,6 +70,61 @@ static uint16_t engaged_mask = 0; // Last-tick engagement of each slot; fire on 
 // still keeps the lone-tap action from firing on release.
 static uint16_t chord_claimed_mask = 0;
 
+// Merge physical holds and the existing timed pulse into one keyboard report.
+struct KeyboardState {
+    uint8_t modifiers = 0;
+    bool keys[SHORTCUT_KEY_USAGE_MAX + 1]{};
+};
+static KeyboardState held_keyboard;
+static uint8_t pulse_modifiers = 0, pulse_key = 0;
+static uint8_t sent_modifiers = 0, sent_keys[6]{};
+static bool keyboard_clear_pending = false;
+static bool consumer_clear_pending = false;
+static bool keyboard_dirty = false;
+static bool wake_owned_keyboard = false;
+
+static bool shortcuts_available() {
+    return !usb_keyboard_only && !usb_reconfiguring && tud_mounted() && !tud_suspended();
+}
+
+static void start_pulse(uint8_t instance) {
+    release_pending = true;
+    release_instance = instance;
+    release_time = make_timeout_time_ms(KEY_PRESS_MS);
+}
+
+static bool send_keyboard_state(bool include_pulse) {
+    if (!keyboard_dirty && !keyboard_clear_pending) return true;
+    if (!tud_hid_n_ready(KEYBOARD_INSTANCE)) return false;
+    uint8_t modifiers = keyboard_clear_pending ? 0 : held_keyboard.modifiers;
+    uint8_t keys[6]{};
+    unsigned count = 0;
+    if (!keyboard_clear_pending) {
+        if (include_pulse) modifiers |= pulse_modifiers;
+        for (unsigned key = 1; key <= SHORTCUT_KEY_USAGE_MAX; ++key) {
+            if (held_keyboard.keys[key] || (include_pulse && pulse_key == key)) {
+                if (count < 6) keys[count] = key;
+                ++count;
+            }
+        }
+        // Standard boot-keyboard rollover: never silently drop a held key.
+        if (count > 6) memset(keys, 1, sizeof(keys));
+    }
+    if (!keyboard_clear_pending && modifiers == sent_modifiers &&
+        memcmp(keys, sent_keys, sizeof(keys)) == 0) {
+        keyboard_dirty = false;
+        return true;
+    }
+    if (!tud_hid_n_keyboard_report(KEYBOARD_INSTANCE, 0, modifiers, keys)) return false;
+    sent_modifiers = modifiers;
+    memcpy(sent_keys, keys, sizeof(keys));
+    // A reset's all-up report may have overtaken freshly sampled holds. Rebuild
+    // once more afterward instead of treating that clear as the desired state.
+    keyboard_dirty = keyboard_clear_pending;
+    keyboard_clear_pending = false;
+    return true;
+}
+
 // Triggers are ButtonIds below Disable (27), so one word holds them all.
 static constexpr uint32_t button_bit(uint8_t button) {
     return button < Disable ? (1u << button) : 0u;
@@ -71,6 +133,12 @@ static constexpr uint32_t button_bit(uint8_t button) {
 static bool is_tap_slot(const ButtonShortcut &shortcut) {
     return shortcut.trigger_b == SHORTCUT_TRIGGER_TAP ||
            shortcut.trigger_b == SHORTCUT_TRIGGER_DOUBLE_TAP;
+}
+
+// Both hold and pulse mappings use the same physical trigger semantics.
+static bool trigger_engaged(const USBGetStateData &state, const ButtonShortcut &shortcut) {
+    return button_is_pressed(state, shortcut.trigger_a) &&
+           (is_tap_slot(shortcut) || button_is_pressed(state, shortcut.trigger_b));
 }
 
 // Taps spell the count out in trigger_b, chords in the flags byte.
@@ -100,39 +168,37 @@ static bool has_double_tap_partner(uint8_t slot, const ButtonShortcut &shortcut)
     return false;
 }
 
-// Both interfaces emit an array field, so "nothing pressed" is an all-zero report.
+// Release only the timed pulse; keyboard holds remain in the merged report.
 static bool send_release(uint8_t instance) {
     if (instance == CONSUMER_INSTANCE) {
         uint16_t usage = 0;
         return tud_hid_n_report(CONSUMER_INSTANCE, 0, &usage, sizeof(usage));
     }
-    return tud_hid_n_keyboard_report(KEYBOARD_INSTANCE, 0, 0, nullptr);
+    keyboard_dirty = true;
+    return send_keyboard_state(false);
 }
 
 static bool send_keyboard(const ButtonShortcut &shortcut) {
     if (release_pending || !tud_hid_n_ready(KEYBOARD_INSTANCE)) return false;
 
-    uint8_t keys[6]{};
-    keys[0] = shortcut.keyboard.key;
-    if (!tud_hid_n_keyboard_report(KEYBOARD_INSTANCE, 0,
-                                   shortcut.keyboard.modifiers, keys)) return false;
+    if (keyboard_clear_pending) return false;
+    pulse_modifiers = shortcut.keyboard.modifiers;
+    pulse_key = shortcut.keyboard.key;
+    keyboard_dirty = true;
+    if (!send_keyboard_state(true)) return false;
 
-    release_pending = true;
-    release_instance = KEYBOARD_INSTANCE;
-    release_time = make_timeout_time_ms(KEY_PRESS_MS);
+    start_pulse(KEYBOARD_INSTANCE);
     return true;
 }
 
 static bool send_consumer(const ButtonShortcut &shortcut) {
-    if (release_pending || !tud_hid_n_ready(CONSUMER_INSTANCE)) return false;
+    if (release_pending || consumer_clear_pending || !tud_hid_n_ready(CONSUMER_INSTANCE)) return false;
 
     // Copy out of the packed struct before taking an address.
     uint16_t usage = shortcut.consumer.usage;
     if (!tud_hid_n_report(CONSUMER_INSTANCE, 0, &usage, sizeof(usage))) return false;
 
-    release_pending = true;
-    release_instance = CONSUMER_INSTANCE;
-    release_time = make_timeout_time_ms(KEY_PRESS_MS);
+    start_pulse(CONSUMER_INSTANCE);
     return true;
 }
 
@@ -201,6 +267,7 @@ static bool tap_tick(uint8_t slot, const ButtonShortcut &shortcut, bool engaged,
 }
 
 static void process_shortcuts(const USBGetStateData &state) {
+    KeyboardState next_keyboard;
     uint16_t new_engaged_mask = 0;
     uint16_t valid_mask = 0;
     uint32_t chord_buttons = 0; // Buttons some configured chord uses.
@@ -212,16 +279,22 @@ static void process_shortcuts(const USBGetStateData &state) {
     for (uint8_t i = 0; i < BUTTON_SHORTCUT_COUNT; ++i) {
         const auto &shortcut = get_button().shortcuts[i];
         if (!shortcut_slot_valid(shortcut)) continue;
+        const bool engaged = trigger_engaged(state, shortcut);
+        if (shortcut.flags & SHORTCUT_FLAG_HOLD) {
+            if (engaged) {
+                next_keyboard.modifiers |= shortcut.keyboard.modifiers;
+                if (shortcut.keyboard.key) next_keyboard.keys[shortcut.keyboard.key] = true;
+            }
+            continue; // Holds are independent of tap/chord arbitration.
+        }
 
         const uint16_t bit = static_cast<uint16_t>(1u << i);
         valid_mask |= bit;
 
-        bool engaged = button_is_pressed(state, shortcut.trigger_a);
         if (!is_tap_slot(shortcut)) {
             const uint32_t buttons =
                     button_bit(shortcut.trigger_a) | button_bit(shortcut.trigger_b);
             chord_buttons |= buttons;
-            engaged = engaged && button_is_pressed(state, shortcut.trigger_b);
             if (engaged) chord_held |= buttons;
         }
         engaged_now[i] = engaged;
@@ -240,11 +313,19 @@ static void process_shortcuts(const USBGetStateData &state) {
 
         if (tap_tick(i, shortcut, engaged_now[i], guarded, claimed)) pending_mask |= bit;
     }
+    if (next_keyboard.modifiers != held_keyboard.modifiers ||
+        memcmp(next_keyboard.keys, held_keyboard.keys, sizeof(next_keyboard.keys)) != 0) {
+        held_keyboard = next_keyboard;
+        keyboard_dirty = true;
+    }
     engaged_mask = new_engaged_mask;
     // A slot reconfigured out from under a pending action never gets to fire it.
     pending_mask &= valid_mask;
     chord_claimed_mask &= valid_mask;
 
+}
+
+static void dispatch_pending() {
     if (!pending_mask) return;
     for (uint8_t i = 0; i < BUTTON_SHORTCUT_COUNT; ++i) {
         const uint16_t bit = static_cast<uint16_t>(1u << i);
@@ -264,16 +345,19 @@ static void process_shortcuts(const USBGetStateData &state) {
         }
         if (handled) {
             pending_mask &= static_cast<uint16_t>(~bit);
-            // Send at most one action per input report.
+            // Send at most one action per service pass.
             break;
         }
     }
 }
 
 void button_shortcut_reset() {
-    if (release_pending && tud_hid_n_ready(release_instance)) {
-        send_release(release_instance);
-    }
+    held_keyboard = {};
+    pulse_modifiers = pulse_key = 0;
+    keyboard_clear_pending = true;
+    keyboard_dirty = true;
+    consumer_clear_pending = consumer_clear_pending ||
+        (release_pending && release_instance == CONSUMER_INSTANCE);
     release_pending = false;
     release_instance = KEYBOARD_INSTANCE;
     release_time = nil_time;
@@ -286,13 +370,36 @@ void button_shortcut_reset() {
     }
 }
 
-void button_shortcut_tick(const USBGetStateData &state) {
-    // Let the held key go before process_shortcuts() looks for the next action.
-    if (release_pending && time_reached(release_time) &&
-        tud_hid_n_ready(release_instance) && send_release(release_instance)) {
-        release_pending = false;
+void button_shortcut_task() {
+    // Also called without BT input so endpoint backpressure/disconnect releases retry.
+    if (!shortcuts_available()) return;
+    if (wake_keyboard_busy()) {
+        if (!wake_owned_keyboard) button_shortcut_reset();
+        wake_owned_keyboard = true;
+        return; // Wake sends reports on this same endpoint; do not overwrite them.
     }
+    wake_owned_keyboard = false;
+    if (consumer_clear_pending && tud_hid_n_ready(CONSUMER_INSTANCE) &&
+        send_release(CONSUMER_INSTANCE)) consumer_clear_pending = false;
+    if (keyboard_clear_pending) {
+        send_keyboard_state(false);
+        return; // Keep the explicit all-up report separate from a new press.
+    }
+    if (release_pending && time_reached(release_time)) {
+        if (tud_hid_n_ready(release_instance) && send_release(release_instance)) {
+            release_pending = false;
+        }
+        // A busy consumer endpoint must not delay a physical keyboard release.
+    }
+    send_keyboard_state(release_pending && release_instance == KEYBOARD_INSTANCE);
+    dispatch_pending(); // Retry queued pulses even if Bluetooth stops reporting.
+
+}
+
+void button_shortcut_tick(const USBGetStateData &state) {
+    if (!shortcuts_available() || wake_keyboard_busy()) return;
     process_shortcuts(state);
+    button_shortcut_task();
 }
 
 #endif // ENABLE_WAKE_HID
