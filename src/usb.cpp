@@ -9,6 +9,29 @@
 #include "bsp/board_api.h"
 #include "config.h"
 #include "utils.h"
+#include "usb.h"
+#include "wake.h"
+#include "audio.h"
+#include "pico/time.h"
+
+// USB descriptor mode: true exposes only the wake keyboard; false exposes the full device.
+bool usb_keyboard_only = false;
+// True from deliberate USB disconnect until remount, preventing reports to stale HID interfaces.
+bool usb_reconfiguring = false;
+
+uint8_t usb_keyboard_instance() { return usb_keyboard_only ? 0 : 1; }
+
+void usb_reconnect(bool keyboard_only) {
+    wake_note_usb_reconnect();
+    tud_disconnect();
+    usb_keyboard_only = keyboard_only;
+    usb_reconfiguring = true;
+    extern bool spk_active;
+    spk_active = false;
+    set_mic_active(false);
+    sleep_ms(150);
+    tud_connect();
+}
 
 uint8_t mute[2] = {}; // 0: SPEAKER(0x02) 1: MIC(0x05)
 float volume[2] = {0.0f,48.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)

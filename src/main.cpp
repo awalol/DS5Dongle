@@ -15,6 +15,7 @@
 #include "debug.h"
 #endif
 #include "wake.h"
+#include "usb.h"
 #include "button_shortcut.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
@@ -40,7 +41,7 @@ USBGetStateData interrupt_in_data{};
 bool report_dirty = false;
 
 void __not_in_flash_func(interrupt_loop)() {
-    if (!tud_hid_ready()) return;
+    if (usb_keyboard_only || usb_reconfiguring || !tud_hid_ready()) return;
 
     // TODO: Refactor for better code reuse
     if (get_config().polling_rate_mode != 2) {
@@ -113,7 +114,9 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
         // modes silently breaks wake while the host is suspended.
         wake_on_bt_input(data + 3, len - 3);
         memcpy(&interrupt_in_data, data + 3, sizeof(interrupt_in_data));
-        button_shortcut_tick(interrupt_in_data);
+        if (!usb_keyboard_only && !usb_reconfiguring) {
+            button_shortcut_tick(interrupt_in_data);
+        }
 
         if (get_config().polling_rate_mode != 2) {
 #if ENABLE_BATT_LED
@@ -135,7 +138,7 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
 uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer,
                                uint16_t reqlen) {
 #ifdef ENABLE_WAKE_HID
-    if (itf == 1) {
+    if (itf == usb_keyboard_instance()) {
         if (reqlen >= 8) {
             memset(buffer, 0, 8);
             return 8;
@@ -191,7 +194,7 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
                            uint16_t bufsize) {
 #ifdef ENABLE_WAKE_HID
-    if (itf == 1) {
+    if (itf == usb_keyboard_instance()) {
         // Drop keyboard SET_REPORT (host LED state).
         return;
     }
@@ -240,6 +243,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 if (config.mic_select != 0) {
                     state.AllowAudioControl = 1;
                     state.MicSelect = config.mic_select;
+                    state.NoiseCancelEnable = 1;
                 }
                 if (config.lock_volume) {
                     state.AllowHeadphoneVolume = 0;
@@ -275,14 +279,20 @@ int main() {
 #endif
 
     board_init();
+    config_load();
+#if !ENABLE_SERIAL
+    usb_keyboard_only = get_config().enable_wake;
+#endif
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
         .speed = TUSB_SPEED_FULL
     };
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
 #if !ENABLE_SERIAL
-    sleep_ms(150);
-    tud_disconnect();
+    if (!usb_keyboard_only) {
+        sleep_ms(150);
+        tud_disconnect();
+    }
 #endif
     board_init_after_tusb();
 #if ENABLE_SERIAL
@@ -326,7 +336,6 @@ int main() {
 
     wake_init();
 
-    config_load();
     gpio_on_disconnect();
 
     bt_init();

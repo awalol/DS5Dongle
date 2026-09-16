@@ -22,6 +22,7 @@
 #include "dse.h"
 #include "fake_ds5.h"
 #include "wake.h"
+#include "usb.h"
 #include "pico/util/queue.h"
 #if ENABLE_BATT_LED
 #include "battery_led.h"
@@ -616,6 +617,12 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             hid_control_cid = 0;
             hid_interrupt_cid = 0;
             gpio_on_disconnect();
+            wake_on_bt_disconnect();
+#if !ENABLE_SERIAL
+            if (get_config().enable_wake && !tud_suspended()) {
+                usb_reconnect(true);
+            }
+#endif
             while (queue_try_remove(&send_fifo, NULL)) {
             }
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
@@ -690,7 +697,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                         is_dse = false;
                     }
 #if !ENABLE_SERIAL
-                    if (!tud_suspended()) tud_connect();
+                    usb_reconnect(false);
 #endif
                 }
             }
@@ -744,6 +751,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                         .AllowAudioControl = 1,
                         .AllowLedColor = 1,
                         .MicSelect = get_config().mic_select,
+                        .NoiseCancelEnable = 1,
                         .AllowLightBrightnessChange = 1,
                         .AllowColorLightFadeAnimation = 1,
                         .LightFadeAnimation = LightFadeAnimation::FadeOut,

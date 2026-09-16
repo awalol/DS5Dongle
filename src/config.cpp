@@ -275,6 +275,7 @@ void set_config(const uint8_t *new_config, const uint16_t len) {
     }
     state.AllowAudioControl = 1;
     state.MicSelect = config.body.mic_select;
+    state.NoiseCancelEnable = 1;
     update_state(state);
 }
 

@@ -13,7 +13,7 @@
 #include "device/usbd.h"
 #include "pico/time.h"
 #include "audio.h"
-#include "wake.h"
+#include "usb.h"
 
 extern bool spk_active;
 
@@ -118,9 +118,6 @@ void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
     }
     if (buffer[0] == 0x03) {
         printf("[CMD] Enter tud reconnect func\n");
-        wake_note_usb_reconnect();   // this disconnect is intentional, not a host sleep
-        tud_disconnect();
-        sleep_ms(150);
-        tud_connect();
+        usb_reconnect(usb_keyboard_only);
     }
 }

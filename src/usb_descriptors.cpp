@@ -27,6 +27,7 @@
 #include "tusb.h"
 #include "config.h"
 #include "usb_descriptors.h"
+#include "usb.h"
 
 #ifndef ENABLE_SERIAL
 #define ENABLE_SERIAL 0
@@ -138,6 +139,12 @@ uint8_t const *tud_descriptor_device_cb(void) {
 //--------------------------------------------------------------------+
 // Configuration Descriptor
 //--------------------------------------------------------------------+
+#ifdef ENABLE_WAKE_HID
+// Shared keyboard interface; only the interface number varies between modes.
+#define WAKE_KEYBOARD_DESCRIPTOR(itf) \
+    TUD_HID_DESCRIPTOR(itf, 0, HID_ITF_PROTOCOL_KEYBOARD, 45, 0x87, 8, 10)
+#endif
+
 uint8_t descriptor_configuration[] = {
     // --- CONFIGURATION DESCRIPTOR ---
     0x09, // bLength
@@ -411,35 +418,7 @@ uint8_t descriptor_configuration[] = {
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, 0x85, 0x08, 0x06, 0x86, 0x40),
 #endif
 #ifdef ENABLE_WAKE_HID
-    // --- INTERFACE DESCRIPTOR (HID Boot Keyboard, wake key only) ---
-    // EP IN 0x87 (chosen to avoid collision with CDC notification EP 0x85
-    // when ENABLE_SERIAL is also defined).
-    0x09, // bLength
-    0x04, // bDescriptorType (INTERFACE)
-    ITF_NUM_HID_KBD, // bInterfaceNumber
-    0x00, // bAlternateSetting: 0
-    0x01, // bNumEndpoints: 1 (IN only)
-    0x03, // bInterfaceClass: HID
-    0x01, // bInterfaceSubClass: Boot
-    0x01, // bInterfaceProtocol: Keyboard
-    0x00, // iInterface
-
-    // HID Descriptor (keyboard)
-    0x09, // bLength
-    0x21, // bDescriptorType (HID)
-    0x11, 0x01, // bcdHID: 1.11
-    0x00, // bCountryCode
-    0x01, // bNumDescriptors
-    0x22, // bDescriptorType: Report
-    0x2D, 0x00, // wDescriptorLength: 45 (sizeof desc_hid_report_kbd)
-
-    // Endpoint Descriptor (HID IN: EP7)
-    0x07, // bLength
-    0x05, // bDescriptorType (ENDPOINT)
-    0x87, // bEndpointAddress: IN EP7
-    0x03, // bmAttributes: Interrupt
-    0x08, 0x00, // wMaxPacketSize: 8 (boot keyboard report)
-    0x0A, // bInterval: 10ms
+    WAKE_KEYBOARD_DESCRIPTOR(ITF_NUM_HID_KBD),
 
     // --- INTERFACE DESCRIPTOR (HID Consumer Control) ---
     // Not a boot device, so subclass/protocol are 0 (unlike the keyboard above).
@@ -473,11 +452,24 @@ uint8_t descriptor_configuration[] = {
 #endif
 };
 
+#ifdef ENABLE_WAKE_HID
+static uint8_t const descriptor_keyboard_only[] = {
+    TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN,
+                          TUSB_DESC_CONFIG_ATT_SELF_POWERED | TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    WAKE_KEYBOARD_DESCRIPTOR(0),
+};
+static_assert(sizeof(descriptor_keyboard_only) == TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN);
+#endif
+static_assert(sizeof(descriptor_configuration) == CONFIG_DESC_LEN_TOTAL);
+
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void) index; // for multiple configurations
+#ifdef ENABLE_WAKE_HID
+    if (usb_keyboard_only) return descriptor_keyboard_only;
+#endif
     auto bInterval = 0x01;
     switch (get_config().polling_rate_mode) {
         case 0:
@@ -946,6 +938,8 @@ uint8_t const desc_hid_report_kbd[] = {
     0xC0              // End Collection
 };
 
+static_assert(sizeof(desc_hid_report_kbd) == 45, "keyboard report descriptor length must match config descriptor" );
+
 // 23-byte Consumer Control report descriptor: one 16-bit usage array, no Report ID.
 // Volume/mute/transport keys must come from this page -- Windows does not act on the
 // Keyboard-page equivalents (0x7F..0x81), which is why they get their own interface.
@@ -970,16 +964,13 @@ static_assert(sizeof(desc_hid_report_consumer) == 23, "consumer report descripto
 // Application return pointer to descriptor
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
-    // Instance 0 is the gamepad; 1 and 2 are the boot keyboard and consumer control
-    // added by ENABLE_WAKE_HID. Map explicitly -- a fall-through would hand a
-    // mis-numbered instance the DualSense descriptor.
-    switch (itf) {
 #ifdef ENABLE_WAKE_HID
-        case 1: return desc_hid_report_kbd;
-        case 2: return desc_hid_report_consumer;
+    // Keyboard-only mode exposes just HID instance 0; composite mode uses 1 and 2.
+    if (itf == usb_keyboard_instance()) return desc_hid_report_kbd;
+    if (!usb_keyboard_only && itf == 2) return desc_hid_report_consumer;
+    if (usb_keyboard_only) return nullptr;
 #endif
-        default: return ds_mode() ? desc_hid_report_ds : desc_hid_report_dse;
-    }
+    return itf == 0 ? (ds_mode() ? desc_hid_report_ds : desc_hid_report_dse) : nullptr;
 }
 
 //--------------------------------------------------------------------+
@@ -1010,6 +1001,10 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
         string_desc_arr[2] = "DualSense Wireless Controller";
     }else {
         string_desc_arr[2] = "DualSense Edge Wireless Controller";
+    }
+
+    if (usb_keyboard_only) {
+        string_desc_arr[2] = "DS5 Dongle Wake Keyboard";
     }
 
     switch (index) {
