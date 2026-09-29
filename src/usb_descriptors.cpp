@@ -26,6 +26,7 @@
 #include "bsp/board_api.h"
 #include "tusb.h"
 #include "config.h"
+#include "hid_report_policy.h"
 #include "usb.h"
 
 #ifndef ENABLE_SERIAL
@@ -436,18 +437,7 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
 #ifdef ENABLE_WAKE_HID
     if (usb_keyboard_only) return descriptor_keyboard_only;
 #endif
-    auto bInterval = 0x01;
-    switch (get_config().polling_rate_mode) {
-        case 0:
-            bInterval = 0x04;
-            break;
-        case 1:
-            bInterval = 0x02;
-            break;
-        case 2:
-            bInterval = 0x01;
-            break;
-    }
+    const auto bInterval = ds5_hid::gamepad_interval_ms(get_config().polling_rate_mode);
     constexpr auto offset = CONFIG_DESC_LEN_BASE;
     descriptor_configuration[offset - 1] = bInterval;
     descriptor_configuration[offset - 8] = bInterval;

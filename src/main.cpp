@@ -2,7 +2,9 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include <array>
 #include <cstdio>
+#include <cstring>
 #include "bsp/board_api.h"
 #include "bt.h"
 #include "button_functions.h"
@@ -26,6 +28,8 @@
 #include "pico/stdio_usb.h"
 #endif
 #include "config.h"
+#include "hid_report_policy.h"
+#include "battery_output_policy.h"
 #include "cmd.h"
 #include "dse.h"
 #include "status_gpio.h"
@@ -55,39 +59,36 @@ critical_section_t report_cs;
 volatile bool report_dirty = false;
 
 void __not_in_flash_func(interrupt_loop)() {
-    if (usb_keyboard_only || usb_reconfiguring || !tud_hid_ready()) return;
+    if (usb_keyboard_only || usb_reconfiguring) return;
 
-    // TODO: Refactor for better code reuse
-    if (get_config().polling_rate_mode != 2) {
-        if (!tud_hid_report(0x01, interrupt_in_data, 63)) {
-            printf("[USBHID] tud_hid_report error\n");
-        }
-        return;
-    }
+    const bool endpoint_ready = tud_hid_ready();
+    if (!endpoint_ready) return;
+    const uint8_t mode = get_config().polling_rate_mode;
 
-    bool should_send = false;
     // Local buffer to hold the report data while we prepare it to send. 
-    uint8_t safe_report[63];
+    uint8_t safe_report[ds5_hid::kInputReportBytes];
 
 
     critical_section_enter_blocking(&report_cs);
-    if (report_dirty) {
-        memcpy(safe_report, interrupt_in_data, 63);
+    const bool should_send = ds5_hid::copy_report_if_due(mode, endpoint_ready, report_dirty,
+                                                          interrupt_in_data, safe_report);
+    if (should_send && mode == 2) {
         report_dirty = false;
-        should_send = true;
     }
     critical_section_exit(&report_cs);
 
-    // Only send to TinyUSB if we actually grabbed fresh data
+    // Fixed modes repeat the cached state; real-time sends only new BT data.
     if (should_send) {
-        if (!tud_hid_report(0x01, safe_report, 63)) {
+        if (!tud_hid_report(0x01, safe_report, ds5_hid::kInputReportBytes)) {
             printf("[USBHID] tud_hid_report error\n");
 
             // If the report failed to queue, restore the dirty flag 
             // so we try again on the next loop iteration.
-            critical_section_enter_blocking(&report_cs);
-            report_dirty = true;
-            critical_section_exit(&report_cs);
+            if (mode == 2) {
+                critical_section_enter_blocking(&report_cs);
+                report_dirty = true;
+                critical_section_exit(&report_cs);
+            }
         }
     }
 }
@@ -101,6 +102,17 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
             if (len >= 4) {
                 mic_add_queue(data + 4, len - 4);
             }
+            return;
+        }
+        if (!ds5_hid::complete_bt_state_report(len)) {
+            // Short packets may still carry all button bytes for wake/shortcut
+            // handling, but cannot replace the complete USB gamepad state.
+            wake_on_bt_input(data + 3, len - 3);
+#ifdef ENABLE_WAKE_HID
+            if (!usb_keyboard_only && !usb_reconfiguring) {
+                ps_shortcut_tick(data + 3, len - 3);
+            }
+#endif
             return;
         }
         if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
@@ -134,23 +146,10 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
         }
         #endif
 
-        if (get_config().polling_rate_mode != 2) {
-            memcpy(interrupt_in_data, data + 3, 63);
-#if ENABLE_BATT_LED
-            battery_led_note_report();
-#endif
-            return;
-        }
-
-        // We add the critical section here to avoid any race conditions when writing to the interrupt_in_data buffer,
-        // which is shared between the main loop and this callback.
-        // The critical section ensures that only one thread can access the buffer at a time,
-        // preventing data corruption and ensuring thread safety.
-        // We also set the report_dirty flag to true to indicate that new data is available
-        //  and needs to be sent in the next interrupt report.
+        // Keep the complete BT-derived state coherent for every fixed or real-time send.
         critical_section_enter_blocking(&report_cs);
-        memcpy(interrupt_in_data, data + 3, 63);
-        report_dirty = true;
+        ds5_hid::update_cached_from_bt_packet(data, len, interrupt_in_data);
+        if (get_config().polling_rate_mode == 2) report_dirty = true;
         critical_section_exit(&report_cs);
 #if ENABLE_BATT_LED
         battery_led_note_report();
@@ -228,14 +227,18 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     (void) itf;
     (void) report_id;
     (void) report_type;
-    (void) buffer;
-    (void) bufsize;
+    if (buffer == nullptr || bufsize == 0) return;
 
     if (is_pico_cmd(report_id)) {
+        // USB stdio in the diagnostic log can service another control request,
+        // reusing TinyUSB's SET_REPORT buffer before the command reads it.
+        std::array<uint8_t, 64> command{};
+        if (bufsize > command.size()) return;
+        memcpy(command.data(), buffer, bufsize);
 #if ENABLE_VERBOSE
-        printf("[HID] Receive 0xf6 setting config, funcid:0x%02X\n", buffer[0]);
+        printf("[HID] Receive 0xf6 setting config, funcid:0x%02X\n", command[0]);
 #endif
-        pico_cmd_set(report_id, buffer, bufsize);
+        pico_cmd_set(report_id, command.data(), bufsize);
         return;
     }
 
@@ -243,13 +246,19 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     if (report_id == 0) {
         switch (buffer[0]) {
             case 0x02: {
+                std::array<uint8_t, ds5_battery::wire::kStateBytes> host_state{};
+                if (!ds5_battery::wire::copy_host_state(buffer, bufsize, host_state)) {
+                    return;
+                }
                 uint8_t outputData[78]{};
+                static_assert(bt_output_payload_fits(sizeof(outputData)));
                 outputData[0] = 0x31;
                 outputData[1] = reportSeqCounter << 4;
                 reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
                 outputData[2] = 0x10;
                 SetStateData state{};
-                memcpy(&state,buffer + 1,sizeof(SetStateData));
+                static_assert(sizeof(SetStateData) == ds5_battery::wire::kStateBytes);
+                memcpy(&state, host_state.data(), sizeof(state));
 
                 const auto &config = get_config();
                 if (config.trigger_reduce > 0) {
@@ -274,7 +283,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 }
 
                 memcpy(outputData + 3, &state, sizeof(SetStateData));
-                bt_write(outputData, sizeof(outputData));
+                bt_write(outputData, sizeof(outputData), BtOutputOrigin::HostState31);
 #if ENABLE_VERBOSE
                 printf_hexdump(outputData,sizeof(outputData));
 #endif
@@ -292,8 +301,27 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 }
 
 int main() {
+#if defined(DS5_PICO2W_EXPERIMENTAL_375MHZ)
+#error "The 375 MHz / 1.20 V experimental profile was retired after a reported boot failure"
+#endif
+#if defined(DS5_PICO2W_EXPERIMENTAL_225MHZ) && defined(DS5_PICO2W_EXPERIMENTAL_300MHZ)
+#error "The Pico 2 W experimental clock profiles are mutually exclusive"
+#endif
+#if defined(DS5_PICO2W_EXPERIMENTAL_225MHZ) && SYS_CLOCK_KHZ != 225000
+#error "The 225 MHz experimental voltage requires SYS_CLOCK_KHZ=225000"
+#endif
+#if defined(DS5_PICO2W_EXPERIMENTAL_300MHZ) && SYS_CLOCK_KHZ != 300000
+#error "The 300 MHz experimental voltage requires SYS_CLOCK_KHZ=300000"
+#endif
+#if !defined(DS5_PICO2W_EXPERIMENTAL_225MHZ) && !defined(DS5_PICO2W_EXPERIMENTAL_300MHZ) && (SYS_CLOCK_KHZ == 225000 || SYS_CLOCK_KHZ == 300000 || SYS_CLOCK_KHZ == 375000)
+#error "225 or 300 MHz requires its profile; 375 MHz is retired"
+#endif
 #if SYS_CLOCK_KHZ != 150000
+#if defined(DS5_PICO2W_EXPERIMENTAL_225MHZ) || defined(DS5_PICO2W_EXPERIMENTAL_300MHZ)
+    vreg_set_voltage(VREG_VOLTAGE_1_15);
+#else
     vreg_set_voltage(VREG_VOLTAGE_1_20);
+#endif
     sleep_ms(1000);
     set_sys_clock_khz(SYS_CLOCK_KHZ, true);
 #endif
@@ -375,6 +403,7 @@ int main() {
 #endif
         cyw43_arch_poll();
         tud_task();
+        bt_battery_feedback_task();
         wake_task();
         audio_loop();
 #if ENABLE_DEBUG

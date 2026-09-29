@@ -5,6 +5,7 @@
 #ifndef DS5_BRIDGE_BT_H
 #define DS5_BRIDGE_BT_H
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -15,7 +16,18 @@ enum CHANNEL_TYPE {
 
 typedef void (*bt_data_callback_t)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len);
 
+inline constexpr size_t kBtOutputPacketCapacity = 548;
+constexpr bool bt_output_payload_fits(size_t payload_len) {
+    return payload_len >= 5 && payload_len <= kBtOutputPacketCapacity - 1;
+}
+
 struct SetStateData;
+
+enum class BtOutputOrigin : uint8_t {
+    Generic,       // Audio and other non-state reports never receive light overlays.
+    HostState31,
+    InternalState32,
+};
 
 int bt_init();
 void bt_register_data_callback(bt_data_callback_t callback);
@@ -27,7 +39,8 @@ void bt_set_scan_idle();
 void bt_set_scan_active();
 void dse_unlock_task();
 bool bt_dse_profiles_ready();
-void bt_write(const uint8_t *data, uint16_t len);
+void bt_write(const uint8_t *data, uint16_t len, BtOutputOrigin origin = BtOutputOrigin::Generic);
+void bt_battery_feedback_task();
 void bt_get_signal_strength(int8_t *rssi);
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();

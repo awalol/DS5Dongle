@@ -1,4 +1,5 @@
 build
+/artifacts/
 .deps
 .vscode
 .idea

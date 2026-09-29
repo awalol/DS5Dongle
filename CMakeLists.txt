@@ -26,9 +26,17 @@ endif ()
 
 option(PICO_W_BUILD "Build for Rasberry Pi Pico W, audio is missing" OFF)
 option(WAVESHARE_RP2350B_PLUS_W_BUILD "Build for Waveshare RP2350B-Plus-W (USB-C, 16MB flash, RM2 wireless)" OFF)
+option(DS5_PICO2W_EXPERIMENTAL_225MHZ "Unsupported Pico 2 W 225 MHz / 1.15 V clock profile" OFF)
+option(DS5_PICO2W_EXPERIMENTAL_300MHZ "Unsupported Pico 2 W 300 MHz / 1.15 V clock profile" OFF)
+if(DS5_PICO2W_EXPERIMENTAL_375MHZ)
+        message(FATAL_ERROR "The 375 MHz / 1.20 V experimental profile was retired after a reported boot failure")
+endif()
 
 if (PICO_W_BUILD AND WAVESHARE_RP2350B_PLUS_W_BUILD)
         message(FATAL_ERROR "PICO_W_BUILD and WAVESHARE_RP2350B_PLUS_W_BUILD are mutually exclusive")
+endif ()
+if (DS5_PICO2W_EXPERIMENTAL_225MHZ AND DS5_PICO2W_EXPERIMENTAL_300MHZ)
+        message(FATAL_ERROR "The Pico 2 W experimental clock profiles are mutually exclusive")
 endif ()
 
 if (PICO_W_BUILD)
@@ -41,6 +49,65 @@ elseif (WAVESHARE_RP2350B_PLUS_W_BUILD)
         list(APPEND PICO_BOARD_HEADER_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/boards/headers")
 else ()
         set(PICO_BOARD pico2_w CACHE STRING "Board type")
+endif ()
+
+# These SDK inputs can change startup clocks before main() adjusts the VREG,
+# or replace the clock domains and flash timing that a profile relies on.
+set(_ds5_clock_override_names
+        SYS_CLOCK_KHZ SYS_CLK_HZ SYS_CLK_KHZ SYS_CLK_MHZ
+        CYW43_PIO_CLOCK_DIV_INT CYW43_PIO_CLOCK_DIV
+        CYW43_PIO_CLOCK_DIV_FRAC8 CYW43_PIO_CLOCK_DIV_FRAC
+        CYW43_PIO_CLOCK_DIV_DYNAMIC
+        PICO_FLASH_SPI_CLKDIV PICO_FLASH_SPI_RXDELAY
+        PICO_CLOCK_ADJUST_PERI_CLOCK_WITH_SYS_CLOCK
+        PICO_CLOCK_AJDUST_PERI_CLOCK_WITH_SYS_CLOCK
+        PLL_COMMON_REFDIV PLL_SYS_REFDIV PLL_SYS_VCO_FREQ_HZ
+        PLL_SYS_VCO_FREQ_KHZ PLL_SYS_POSTDIV1 PLL_SYS_POSTDIV2
+        SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST SYS_CLK_VREG_VOLTAGE_MIN
+        SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST_DELAY_US
+        XOSC_HZ XOSC_KHZ XOSC_MHZ
+        USB_CLK_HZ USB_CLK_KHZ USB_CLK_MHZ
+        PLL_USB_REFDIV PLL_USB_VCO_FREQ_HZ PLL_USB_VCO_FREQ_KHZ
+        PLL_USB_POSTDIV1 PLL_USB_POSTDIV2)
+
+if (DS5_PICO2W_EXPERIMENTAL_225MHZ OR DS5_PICO2W_EXPERIMENTAL_300MHZ)
+        if (PICO_W_BUILD OR WAVESHARE_RP2350B_PLUS_W_BUILD OR NOT "${PICO_BOARD}" STREQUAL "pico2_w")
+                message(FATAL_ERROR "Experimental clock profiles require the standard pico2_w board")
+        endif ()
+        foreach(_board_override IN ITEMS PICO_BOARD_CMAKE_DIRS PICO_BOARD_HEADER_DIRS
+                PICO_BOARD_CMAKE_FILE PICO_BOARD_HEADER_FILE)
+                if (DEFINED ENV{${_board_override}} OR
+                    (DEFINED ${_board_override} AND NOT "${${_board_override}}" STREQUAL ""))
+                        message(FATAL_ERROR "Experimental clock profiles reject custom board configuration: ${_board_override}")
+                endif ()
+        endforeach()
+        get_cmake_property(_ds5_config_variables VARIABLES)
+        get_cmake_property(_ds5_config_cache_variables CACHE_VARIABLES)
+        list(APPEND _ds5_config_variables ${_ds5_config_cache_variables})
+        list(REMOVE_DUPLICATES _ds5_config_variables)
+        foreach(_ds5_config_variable IN LISTS _ds5_config_variables)
+                if (_ds5_config_variable MATCHES "^PICO_.*CONFIG_HEADER_FILES$" AND
+                    NOT "${${_ds5_config_variable}}" STREQUAL "")
+                        message(FATAL_ERROR "Experimental clock profiles reject custom config headers: ${_ds5_config_variable}")
+                endif ()
+        endforeach()
+        if (DEFINED ENV{PICO_CONFIG_HEADER_FILES})
+                message(FATAL_ERROR "Experimental clock profiles reject environment config headers")
+        endif ()
+        if (DEFINED ENV{PICO_DEFAULT_BOOT_STAGE2} OR DEFINED ENV{PICO_DEFAULT_BOOT_STAGE2_FILE})
+                message(FATAL_ERROR "Experimental clock profiles reject environment boot2 overrides")
+        endif ()
+        if (DEFINED PICO_DEFAULT_BOOT_STAGE2_FILE OR
+            (DEFINED PICO_DEFAULT_BOOT_STAGE2 AND NOT "${PICO_DEFAULT_BOOT_STAGE2}" STREQUAL "compile_time_choice"))
+                message(FATAL_ERROR "Experimental clock profiles require the Pico 2 W default boot2 selection")
+        endif ()
+        # A profile owns this entire clock/timing bundle; independent CMake
+        # overrides could create a firmware with an unsafe partial profile.
+        foreach(_clock_override IN LISTS _ds5_clock_override_names)
+                if (DEFINED ${_clock_override})
+                        message(FATAL_ERROR "${_clock_override} conflicts with the experimental clock profile")
+                endif ()
+        endforeach()
 endif ()
 
 # Diagnostic: confirm PICO_BOARD resolution actually applied. Build log will
@@ -97,6 +164,14 @@ else ()
         endif ()
 endif ()
 
+if (DS5_PICO2W_EXPERIMENTAL_225MHZ)
+        set(SYS_CLOCK_KHZ_VALUE 225000)
+        set(CYW43_PIO_CLOCK_DIV_VALUE 3)
+elseif (DS5_PICO2W_EXPERIMENTAL_300MHZ)
+        set(SYS_CLOCK_KHZ_VALUE 300000)
+        set(CYW43_PIO_CLOCK_DIV_VALUE 4)
+endif ()
+
 
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
@@ -106,6 +181,40 @@ project(ds5-bridge C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
+
+if (DS5_PICO2W_EXPERIMENTAL_225MHZ OR DS5_PICO2W_EXPERIMENTAL_300MHZ)
+        get_filename_component(_ds5_expected_board_header
+                "${PICO_SDK_PATH}/src/boards/include/boards/pico2_w.h" REALPATH)
+        if (NOT PICO_BOARD_HEADER_FILE)
+                message(FATAL_ERROR "Experimental clock profiles require the SDK pico2_w board header")
+        endif ()
+        get_filename_component(_ds5_actual_board_header "${PICO_BOARD_HEADER_FILE}" REALPATH)
+        if (NOT "${_ds5_actual_board_header}" STREQUAL "${_ds5_expected_board_header}")
+                message(FATAL_ERROR "Experimental clock profiles require the SDK pico2_w board header")
+        endif ()
+endif ()
+
+# Global C/C++/ASM flags can override target definitions later on the compile
+# command line. Never let them silently split an experimental clock profile.
+set(_ds5_protected_clock_definitions
+        DS5_PICO2W_EXPERIMENTAL_225MHZ
+        DS5_PICO2W_EXPERIMENTAL_300MHZ
+        # Keep rejecting stale compiler injections of the retired profile.
+        DS5_PICO2W_EXPERIMENTAL_375MHZ
+        ${_ds5_clock_override_names})
+get_cmake_property(_ds5_flag_variables VARIABLES)
+get_cmake_property(_ds5_cache_flag_variables CACHE_VARIABLES)
+list(APPEND _ds5_flag_variables ${_ds5_cache_flag_variables})
+list(REMOVE_DUPLICATES _ds5_flag_variables)
+foreach(_ds5_flag_variable IN LISTS _ds5_flag_variables)
+        if (_ds5_flag_variable MATCHES "^CMAKE_(C|CXX|ASM)_FLAGS($|_[A-Za-z0-9_]+$)")
+                foreach(_ds5_definition IN LISTS _ds5_protected_clock_definitions)
+                        if ("${${_ds5_flag_variable}}" MATCHES "(^|[ \t;\"',])[-/][DU][ \t,]*${_ds5_definition}(=|[ \t;\"',]|$)")
+                                message(FATAL_ERROR "${_ds5_flag_variable} overrides ${_ds5_definition}; use the CMake profile option")
+                        endif ()
+                endforeach()
+        endif ()
+endforeach()
 
 # Add executable. Default name is the project name, version 0.1
 
@@ -118,6 +227,7 @@ add_executable(ds5-bridge
         src/button_functions.cpp
         src/dse.cpp
         src/config.cpp
+        src/battery_feedback.cpp
         src/status_gpio.cpp
         src/cmd.cpp
         src/ram_mem.c
@@ -280,12 +390,27 @@ target_compile_options(ds5-bridge PRIVATE -fsigned-char)
 target_compile_definitions(wdl_resampler PRIVATE
         WDL_RESAMPLE_TYPE=float
 )
-if(${SYS_CLOCK_KHZ_VALUE} GREATER 266000)
+if(DS5_PICO2W_EXPERIMENTAL_225MHZ)
+    set(PICO_FLASH_SPI_CLKDIV 3)
+    set(_ds5_flash_rxdelay 3)
+elseif(DS5_PICO2W_EXPERIMENTAL_300MHZ)
+    set(PICO_FLASH_SPI_CLKDIV 4)
+    set(_ds5_flash_rxdelay 4)
+elseif(${SYS_CLOCK_KHZ_VALUE} GREATER 266000)
     set(PICO_FLASH_SPI_CLKDIV 4)
 else()
     set(PICO_FLASH_SPI_CLKDIV 2)
 endif()
 target_compile_definitions(bs2_default PRIVATE PICO_FLASH_SPI_CLKDIV=${PICO_FLASH_SPI_CLKDIV})
+if(DEFINED _ds5_flash_rxdelay)
+    target_compile_definitions(bs2_default PRIVATE PICO_FLASH_SPI_RXDELAY=${_ds5_flash_rxdelay})
+    set(_ds5_flash_rxdelay_report "${_ds5_flash_rxdelay}")
+elseif(PICO_W_BUILD)
+    set(_ds5_flash_rxdelay_report "N/A (RP2040 boot2)")
+else()
+    set(_ds5_flash_rxdelay_report "2 (SDK default)")
+endif()
+message(STATUS "DS5Dongle effective clocks -- SYS=${SYS_CLOCK_KHZ_VALUE} kHz, CYW43 PIO /${CYW43_PIO_CLOCK_DIV_VALUE}, Flash XIP /${PICO_FLASH_SPI_CLKDIV}, RXDELAY=${_ds5_flash_rxdelay_report}")
 target_compile_definitions(ds5-bridge PRIVATE PICO_EMBED_XIP_SETUP=1)
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
@@ -305,6 +430,11 @@ target_compile_definitions(ds5-bridge PRIVATE
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
         DISABLE_SPEAKER_PROC=${DISABLE_SPEAKER_PROC_VALUE}
 )
+if(DS5_PICO2W_EXPERIMENTAL_225MHZ)
+    target_compile_definitions(ds5-bridge PRIVATE DS5_PICO2W_EXPERIMENTAL_225MHZ)
+elseif(DS5_PICO2W_EXPERIMENTAL_300MHZ)
+    target_compile_definitions(ds5-bridge PRIVATE DS5_PICO2W_EXPERIMENTAL_300MHZ)
+endif()
 
 # Wake-on-PS + Xbox Game Bar are now in the base firmware, gated at runtime by the
 # enable_wake / ps_shortcut_enabled config fields. ENABLE_WAKE_HID stays defined so

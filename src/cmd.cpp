@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "bt.h"
+#include "battery_config_protocol.h"
 #include "config.h"
 #include "device/usbd.h"
 #include "pico/time.h"
@@ -36,6 +37,12 @@ uint16_t pico_cmd_get(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
         }
         const auto len = std::min(sizeof(Config_body),static_cast<size_t>(reqlen));
         memcpy(buffer,&get_config(),len);
+        if (reqlen >= sizeof(Config_body) + battery_config_protocol::kTailSize) {
+            battery_config_protocol::encode_tail(buffer + sizeof(Config_body),
+                                                 battery_feedback_enabled(),
+                                                 battery_feedback_save_status());
+            return sizeof(Config_body) + battery_config_protocol::kTailSize;
+        }
         return len;
     }
     if (report_id == 0xf8) {
@@ -72,14 +79,15 @@ uint16_t pico_cmd_get(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
 }
 
 void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
-    (void) report_id;
-    if (bufsize == 0) {
+    if (report_id != 0xf6 || bufsize == 0) {
         return;
     }
 
     // 0x01 update config in variable
     // 0x02 write config to flash
     // 0x03 reconnect tinyusb device;
+    // 0x04 is reserved for BOOTSEL; do not assign it to configuration.
+    // 0x05 updates the independent battery feedback flag in RAM.
     if (buffer[0] == 0x01) {
 #if ENABLE_VERBOSE
         printf("[CMD] Enter config set func\n");
@@ -93,5 +101,13 @@ void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
     if (buffer[0] == 0x03) {
         printf("[CMD] Enter tud reconnect func\n");
         usb_reconnect(usb_keyboard_only);
+    }
+    if (buffer[0] == 0x05) {
+        bool enabled = false;
+        if (battery_config_protocol::decode_update(buffer, bufsize, enabled)) {
+            set_battery_feedback_enabled(enabled);
+        } else {
+            printf("[CMD] Invalid battery feedback update ignored\n");
+        }
     }
 }

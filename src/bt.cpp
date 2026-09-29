@@ -18,12 +18,16 @@
 #include "bsp/board_api.h"
 #include "classic/sdp_server.h"
 #include "config.h"
+#include "hid_report_policy.h"
+#include "battery_feedback.h"
+#include "battery_output_policy.h"
 #include "status_gpio.h"
 #include "dse.h"
 #include "fake_ds5.h"
 #include "wake.h"
 #include "usb.h"
 #include "pico/util/queue.h"
+#include "pico/time.h"
 #if ENABLE_BATT_LED
 #include "battery_led.h"
 #endif
@@ -75,9 +79,95 @@ unordered_map<uint8_t, vector<uint8_t> > feature_data;
 queue_t send_fifo;
 
 struct send_element {
-    uint8_t data[672];
-    size_t len;
+    uint8_t data[kBtOutputPacketCapacity];
+    uint16_t len;
+    ds5_battery::wire::FrameKind kind;
+    uint32_t light_epoch;
 };
+static_assert(sizeof(send_element) == 556);
+
+static ds5_battery::BatteryFeedback battery_feedback;
+static uint32_t connection_generation = 0;
+static bool feedback_link_open = false;
+static ds5_battery::wire::CanSendRequest can_send_request;
+static ds5_battery::wire::LightEpoch light_epoch;
+static uint64_t next_send_retry_us = 0;
+static uint8_t last_restore_mask = 0;
+static bool synthetic_attempted_last = false;
+
+static bool is_state_kind(ds5_battery::wire::FrameKind kind) {
+    return kind == ds5_battery::wire::FrameKind::HostState31 ||
+           kind == ds5_battery::wire::FrameKind::InternalState32;
+}
+
+static void clear_send_queue() {
+    while (queue_try_remove(&send_fifo, nullptr)) {
+    }
+    can_send_request.clear();
+    light_epoch = ds5_battery::wire::LightEpoch{};
+    next_send_retry_us = 0;
+    last_restore_mask = 0;
+    synthetic_attempted_last = false;
+}
+
+static void close_feedback_link() {
+    if (feedback_link_open) {
+        battery_feedback.on_link_closed(connection_generation);
+        feedback_link_open = false;
+    }
+    clear_send_queue();
+}
+
+static void sync_handoff_start(uint64_t now_us) {
+    const auto output = battery_feedback.output_at(now_us);
+    const uint8_t restore_mask = static_cast<uint8_t>(
+        (output.player_restore ? 1 : 0) | (output.rgb_restore ? 2 : 0));
+    if ((restore_mask & ~last_restore_mask) != 0) {
+        light_epoch.start_handoff();
+        synthetic_attempted_last = false;
+    }
+    last_restore_mask = restore_mask;
+}
+
+static void finish_handoff_if_caught_up() {
+    if (light_epoch.active() && !battery_feedback.restore_pending() &&
+        queue_is_empty(&send_fifo)) {
+        light_epoch.clear();
+    }
+}
+
+static void request_next_send(uint64_t now_us) {
+    if (!feedback_link_open || hid_interrupt_cid == 0 || now_us < next_send_retry_us) return;
+    if (can_send_request.pending()) return;
+    const bool fifo_pending = !queue_is_empty(&send_fifo);
+    const bool synthetic_due = (battery_feedback_enabled() ||
+                                battery_feedback.restore_pending()) &&
+                               battery_feedback.output_at(now_us).synthetic_due;
+    if (!ds5_battery::wire::request_needed(
+            feedback_link_open, can_send_request.pending(), now_us, next_send_retry_us,
+            fifo_pending, synthetic_due)) return;
+    // BTstack may emit CAN_SEND_NOW within this call; mark the request first.
+    const uint8_t status = can_send_request.issue([]() {
+        return l2cap_request_can_send_now_event(hid_interrupt_cid);
+    });
+    if (status != 0) {
+        printf("[L2CAP] CAN_SEND request rejected: 0x%02X\n", status);
+        next_send_retry_us = now_us + 10000;
+    }
+}
+
+void bt_battery_feedback_task() {
+    const uint64_t now_us = time_us_64();
+    const bool enabled = battery_feedback_enabled();
+    battery_feedback.set_enabled(enabled, now_us);
+    if (!enabled && !battery_feedback.restore_pending() &&
+        !light_epoch.active() && queue_is_empty(&send_fifo)) return;
+    sync_handoff_start(now_us);
+    finish_handoff_if_caught_up();
+    if (!enabled && !battery_feedback.restore_pending() &&
+        queue_is_empty(&send_fifo)) return;
+    request_next_send(now_us);
+}
 
 absolute_time_t inactive_time = 0; // 手柄长时间静默
 
@@ -98,7 +188,7 @@ void bt_register_data_callback(bt_data_callback_t callback) {
 }
 
 void bt_send_packet(uint8_t *data, uint16_t len) {
-    if (hid_interrupt_cid != 0) {
+    if (feedback_link_open && hid_interrupt_cid != 0) {
         l2cap_send(hid_interrupt_cid, data, len);
     }
 }
@@ -149,6 +239,7 @@ void bt_l2cap_init() {
 
 int bt_init() {
     queue_init(&send_fifo, sizeof(send_element), 10);
+    battery_feedback.set_enabled(battery_feedback_enabled(), time_us_64());
 
     bt_l2cap_init();
 
@@ -598,6 +689,7 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
+            close_feedback_link();
 #if !ENABLE_SERIAL
             // Hide the USB device when no controller is paired (upstream behavior), EXCEPT when
             // wake is on (stay on the bus so a returning controller can signal a host wake) or
@@ -623,8 +715,6 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
                 usb_reconnect(true);
             }
 #endif
-            while (queue_try_remove(&send_fifo, NULL)) {
-            }
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
 #if ENABLE_BATT_LED
             battery_led_on_disconnect();
@@ -646,17 +736,107 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
     }
 }
 
+static void send_synthetic_state(const ds5_battery::Output &output, uint64_t now_us) {
+    static_assert(bt_output_payload_fits(142));
+    static uint8_t packet[143];
+    memset(packet, 0, sizeof(packet));
+    packet[0] = 0xa2;
+    packet[1] = 0x32;
+    packet[2] = 0x10;
+    packet[3] = 0x90;
+    packet[4] = 0x3f;
+    const auto applied = ds5_battery::wire::apply_output(
+        packet, sizeof(packet), ds5_battery::wire::FrameKind::SyntheticState32, output);
+    if (!applied.player && !applied.rgb && !applied.reset) return;
+    fill_output_report_checksum(packet + 1, sizeof(packet) - 1);
+    synthetic_attempted_last = true;
+    const uint8_t status = l2cap_send(hid_interrupt_cid, packet, sizeof(packet));
+    const bool accepted = status == 0;
+    const bool restoring = output.player_restore || output.rgb_restore || output.reset_restore;
+    battery_feedback.on_send_result(output,
+                                    {accepted, applied.player, applied.rgb, applied.reset,
+                                     restoring, false},
+                                    now_us);
+    sync_handoff_start(now_us);
+    finish_handoff_if_caught_up();
+    if (!accepted) {
+        printf("[L2CAP] Synthetic light send rejected: 0x%02X\n", status);
+        next_send_retry_us = now_us + 10000;
+    }
+}
+
+static void send_queued_front(send_element &packet, const ds5_battery::Output &output,
+                              uint64_t now_us) {
+    const bool state_packet = is_state_kind(packet.kind);
+    ds5_battery::wire::Applied applied{};
+    const bool stale_lights = light_epoch.stale(packet.light_epoch);
+    if (state_packet) {
+        const bool scrubbed = ds5_battery::wire::scrub_stale_lights(
+            packet.data, packet.len, packet.kind, stale_lights, output);
+        applied = ds5_battery::wire::apply_output(
+            packet.data, packet.len, packet.kind, output);
+        if (scrubbed || applied.player || applied.rgb) {
+            fill_output_report_checksum(packet.data + 1, packet.len - 1);
+        }
+    }
+    const uint8_t status = l2cap_send(hid_interrupt_cid, packet.data, packet.len);
+    const bool accepted = status == 0;
+    synthetic_attempted_last = false;
+    if (!accepted) {
+        printf("[L2CAP] Queued send rejected, kind=%u status=0x%02X\n",
+               static_cast<unsigned>(packet.kind), status);
+        // Match the original FIFO: an ordinary rejected packet is dropped.
+        // Synthetic light handback remains independent and retryable.
+        next_send_retry_us = now_us + 10000;
+    }
+    if (state_packet) {
+        battery_feedback.on_send_result(output,
+                                        {accepted, applied.player, applied.rgb, applied.reset,
+                                         false, stale_lights && applied.reset},
+                                        now_us);
+        sync_handoff_start(now_us);
+    }
+    if (light_epoch.active() && !battery_feedback.restore_pending() &&
+        (queue_is_empty(&send_fifo) || packet.light_epoch == light_epoch.tag())) {
+        light_epoch.clear();
+    }
+}
+
+static void send_next_interrupt_packet(uint64_t now_us) {
+    if (!feedback_link_open || hid_interrupt_cid == 0) return;
+    const bool has_front = !queue_is_empty(&send_fifo);
+    const auto output = battery_feedback.output_at(now_us);
+    const auto choice = ds5_battery::wire::choose_next(
+        feedback_link_open, has_front, output.synthetic_due, synthetic_attempted_last);
+    if (choice == ds5_battery::wire::DispatchChoice::Synthetic) {
+        send_synthetic_state(output, now_us);
+    } else if (choice == ds5_battery::wire::DispatchChoice::Queued) {
+        send_element front;
+        if (queue_try_remove(&send_fifo, &front)) {
+            send_queued_front(front, output, now_us);
+        }
+    }
+}
+
 static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint16_t channel, uint8_t *packet,
                                                       uint16_t size) {
     (void) channel;
 
     if (packet_type == L2CAP_DATA_PACKET) {
-        if (channel == hid_interrupt_cid) {
+        if (hid_interrupt_cid != 0 && channel == hid_interrupt_cid) {
             // printf("[L2CAP] HID Interrupt data len=%u\n", size);
             // printf_hexdump(packet, size);
+            if (feedback_link_open && size >= ds5_hid::kBtReportBytes &&
+                packet[1] == 0x31 && (packet[2] & 0x02) == 0) {
+                const uint64_t now_us = time_us_64();
+                battery_feedback.set_enabled(battery_feedback_enabled(), now_us);
+                battery_feedback.on_real_battery_report(connection_generation, packet[55], now_us);
+                sync_handoff_start(now_us);
+            }
             bt_data_callback(INTERRUPT, packet, size);
 
             // 静默检测
+            if (!ds5_hid::bt_packet_has_button_prefix(size)) return;
             if (!(packet[2] & 1) || get_config().inactive_time == 0) {
                 return;
             }
@@ -734,6 +914,14 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                 } else if (psm == PSM_HID_INTERRUPT) {
                     printf("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
                     hid_interrupt_cid = local_cid;
+                    if (connection_generation == UINT32_MAX) connection_generation = 0;
+                    ++connection_generation;
+                    feedback_link_open = true;
+                    light_epoch = ds5_battery::wire::LightEpoch{};
+                    last_restore_mask = 0;
+                    synthetic_attempted_last = false;
+                    battery_feedback.on_link_open(connection_generation);
+                    battery_feedback.set_enabled(battery_feedback_enabled(), time_us_64());
                     gpio_on_connect();
                     // Successful pair removes this specific MAC from the persistent
                     // blacklist (treated as user-explicit re-pair in PS+Share mode).
@@ -788,6 +976,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                 }*/
             } else {
                 const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
+                close_feedback_link();
                 hid_control_cid = 0;
                 hid_interrupt_cid = 0;
                 device_found = false;
@@ -811,6 +1000,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                 hid_control_cid = 0;
                 printf("[L2CAP] HID Control closed cid=0x%04X\n", local_cid);
             } else if (local_cid == hid_interrupt_cid) {
+                close_feedback_link();
                 hid_interrupt_cid = 0;
                 printf("[L2CAP] HID Interrupt closed cid=0x%04X\n", local_cid);
             } else {
@@ -823,18 +1013,16 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
         }
 
         case L2CAP_EVENT_CAN_SEND_NOW: {
-            // printf("[L2CAP] L2CAP_EVENT_CAN_SEND_NOW\n");
-
-            send_element send_packet{};
-            if (queue_try_remove(&send_fifo, &send_packet)) {
-                const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
-                if (status != 0) {
-                    printf("[L2CAP] L2CAP Send Error, Status: 0x%02X\n", status);
-                }
-            }
-            if (!queue_is_empty(&send_fifo)) {
-                l2cap_request_can_send_now_event(hid_interrupt_cid);
-            }
+            if (hid_interrupt_cid == 0 ||
+                l2cap_event_can_send_now_get_local_cid(packet) != hid_interrupt_cid) break;
+            can_send_request.delivered();
+            const uint64_t now_us = time_us_64();
+            battery_feedback.set_enabled(battery_feedback_enabled(), now_us);
+            sync_handoff_start(now_us);
+            send_next_interrupt_packet(now_us);
+            // Keep the original FIFO cadence: request the next slot from this
+            // callback when more output remains, including audio packets.
+            request_next_send(time_us_64());
             break;
         }
     }
@@ -851,21 +1039,41 @@ void bt_control_send(const uint8_t *data, uint16_t len) {
     }
 }
 
-void __not_in_flash_func(bt_write)(const uint8_t *data, const uint16_t len) {
-    if (hid_interrupt_cid == 0) return;
+void __not_in_flash_func(bt_write)(const uint8_t *data, const uint16_t len,
+                                  BtOutputOrigin origin) {
+    if (hid_interrupt_cid == 0 || !feedback_link_open || data == nullptr ||
+        !bt_output_payload_fits(len)) return;
     static send_element packet{};
-    packet.len = len + 1;
+    packet.kind = origin == BtOutputOrigin::HostState31
+                      ? ds5_battery::wire::FrameKind::HostState31
+                      : origin == BtOutputOrigin::InternalState32
+                            ? ds5_battery::wire::FrameKind::InternalState32
+                            : ds5_battery::wire::FrameKind::Other;
+    if (is_state_kind(packet.kind)) {
+        const size_t state_offset = origin == BtOutputOrigin::HostState31 ? 3 : 4;
+        if (len >= state_offset + ds5_battery::wire::kStandardStateBytes + 4) {
+            const auto command = ds5_battery::wire::capture_lights(
+                data + state_offset, len - state_offset - 4);
+            if (battery_feedback.observe_base_lights(command, light_epoch.active()) &&
+                light_epoch.active()) {
+                light_epoch.note_light_intent();
+                synthetic_attempted_last = false;
+                sync_handoff_start(time_us_64());
+            }
+        }
+    }
+    packet.light_epoch = light_epoch.tag();
+    packet.len = static_cast<uint16_t>(len + 1);
     packet.data[0] = 0xA2;
     memcpy(packet.data + 1, data, len);
     fill_output_report_checksum(packet.data + 1, len);
 
     if (!queue_try_add(&send_fifo, &packet)) {
-        printf("[L2CAP bt_write] Error: Failed to add packet to send FIFO\n");
+        printf("[L2CAP bt_write] Queue refused kind=%u, light intent retained\n",
+               static_cast<unsigned>(packet.kind));
         return;
     }
-    if (queue_get_level(&send_fifo) == 1) {
-        l2cap_request_can_send_now_event(hid_interrupt_cid);
-    }
+    request_next_send(time_us_64());
 }
 
 vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
@@ -923,10 +1131,11 @@ void init_feature() {
 
 void update_state(const SetStateData &state) {
     uint8_t pkt[142]{};
+    static_assert(bt_output_payload_fits(sizeof(pkt)));
     pkt[0] = 0x32;
     pkt[1] = 0x10;
     pkt[2] = 0x90;
     pkt[3] = 0x3f;
     memcpy(pkt + 4, &state, sizeof(SetStateData));
-    bt_write(pkt, sizeof(pkt));
+    bt_write(pkt, sizeof(pkt), BtOutputOrigin::InternalState32);
 }

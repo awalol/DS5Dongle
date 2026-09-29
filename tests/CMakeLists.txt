@@ -1,0 +1,29 @@
+cmake_minimum_required(VERSION 3.20)
+project(ds5_hid_report_policy_tests LANGUAGES CXX)
+
+add_executable(hid_report_policy_test hid_report_policy_test.cpp)
+target_compile_features(hid_report_policy_test PRIVATE cxx_std_20)
+target_include_directories(hid_report_policy_test PRIVATE ../src)
+
+add_executable(battery_feedback_test battery_feedback_test.cpp ../src/battery_feedback.cpp)
+target_compile_features(battery_feedback_test PRIVATE cxx_std_20)
+target_include_directories(battery_feedback_test PRIVATE ../src)
+
+add_executable(battery_output_policy_test battery_output_policy_test.cpp)
+target_compile_features(battery_output_policy_test PRIVATE cxx_std_20)
+target_include_directories(battery_output_policy_test PRIVATE ../src)
+
+add_executable(battery_transport_sequence_test battery_transport_sequence_test.cpp ../src/battery_feedback.cpp)
+target_compile_features(battery_transport_sequence_test PRIVATE cxx_std_20)
+target_include_directories(battery_transport_sequence_test PRIVATE ../src)
+
+add_executable(battery_config_protocol_test battery_config_protocol_test.cpp)
+target_compile_features(battery_config_protocol_test PRIVATE cxx_std_20)
+target_include_directories(battery_config_protocol_test PRIVATE ../src)
+
+enable_testing()
+add_test(NAME hid_report_policy COMMAND hid_report_policy_test)
+add_test(NAME battery_feedback COMMAND battery_feedback_test)
+add_test(NAME battery_output_policy COMMAND battery_output_policy_test)
+add_test(NAME battery_transport_sequence COMMAND battery_transport_sequence_test)
+add_test(NAME battery_config_protocol COMMAND battery_config_protocol_test)

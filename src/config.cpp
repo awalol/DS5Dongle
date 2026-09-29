@@ -3,6 +3,8 @@
 //
 
 #include "config.h"
+#include "battery_config_protocol.h"
+#include "hid_report_policy.h"
 
 #include <cmath>
 #include <cstring>
@@ -20,11 +22,13 @@ constexpr uint32_t CONFIG_MAGIC = 0x66ccff00;
 constexpr uint16_t CONFIG_VERSION = 5; // 如果想要强制重置配置，再更新 CONFIG_VERSION。
 constexpr uint32_t CONFIG_FLASH_OFFSET = PICO_FLASH_BANK_STORAGE_OFFSET - FLASH_SECTOR_SIZE;
 static Config config{};
+static bool battery_feedback_enabled_value = false;
+static uint8_t battery_feedback_status = 0;
 bool is_dse = false;
 
 // 编译期保护
 // 判断Config结构体是否能放进flash 256bytes
-static_assert(sizeof(Config) <= FLASH_PAGE_SIZE);
+static_assert(sizeof(Config) + battery_config_protocol::kRecordSize <= FLASH_PAGE_SIZE);
 // 配置区起始地址必须按 flash sector 对齐。
 static_assert(CONFIG_FLASH_OFFSET % FLASH_SECTOR_SIZE == 0);
 
@@ -92,7 +96,7 @@ void config_valid() {
         body->disable_pico_led = 0;
         printf("[Config] disable_pico_led is invalid\n");
     }
-    if (body->polling_rate_mode > 2) {
+    if (!ds5_hid::valid_polling_rate_mode(body->polling_rate_mode)) {
         body->polling_rate_mode = 1;
         printf("[Config] polling_rate_mode is invalid\n");
     }
@@ -145,6 +149,19 @@ void config_valid() {
 void config_load() {
     memcpy(&config, get_xip_addr(CONFIG_FLASH_OFFSET), sizeof(Config));
 
+    // The base config may be recovered from the old sector by config_valid().
+    // In that case the current-sector extension must not be adopted separately.
+    const bool current_base_valid = config.magic == CONFIG_MAGIC &&
+                                    config.size == sizeof(Config_body) &&
+                                    config.body.config_version == CONFIG_VERSION &&
+                                    config.crc32 == calc_config_crc(config);
+    battery_feedback_enabled_value = false;
+    if (current_base_valid) {
+        const auto *record = reinterpret_cast<const uint8_t *>(get_xip_addr(CONFIG_FLASH_OFFSET)) + sizeof(Config);
+        battery_config_protocol::decode_record(record, battery_feedback_enabled_value, crc32);
+    }
+    battery_feedback_status = 0;
+
     config_valid();
 }
 
@@ -164,26 +181,52 @@ bool config_save() {
     alignas(4) uint8_t page[FLASH_PAGE_SIZE];
     memset(page, 0xff, sizeof(page));
     memcpy(page, &config, sizeof(Config));
+    battery_config_protocol::encode_record(page + sizeof(Config), battery_feedback_enabled_value, crc32);
 
     const int rc = flash_safe_execute(config_save_flash_op, page, 1000);
     if (rc != PICO_OK) {
         printf("[Config] config_save flash_safe_execute failed: %d\n", rc);
+        battery_feedback_status = 2;
         return false;
     }
 
     Config verify{};
     memcpy(&verify, get_xip_addr(CONFIG_FLASH_OFFSET), sizeof(verify));
-    const auto verify_crc32 = calc_config_crc(verify);
-    if (verify_crc32 == config.crc32) {
+    uint8_t verify_record[battery_config_protocol::kRecordSize];
+    const auto *flash_record = reinterpret_cast<const uint8_t *>(get_xip_addr(CONFIG_FLASH_OFFSET)) + sizeof(Config);
+    memcpy(verify_record, flash_record, sizeof(verify_record));
+    bool verify_enabled = false;
+    const bool base_verified = memcmp(&verify, &config, sizeof(Config)) == 0 &&
+                               verify.crc32 == calc_config_crc(verify);
+    const bool extension_verified = battery_config_protocol::decode_record(
+        verify_record, verify_enabled, crc32) &&
+        verify_enabled == battery_feedback_enabled_value &&
+        memcmp(verify_record, page + sizeof(Config), sizeof(verify_record)) == 0;
+    if (base_verified && extension_verified) {
         printf("[Config] Config write flash verify success\n");
+        battery_feedback_status = 1;
         return true;
     }
     printf("[Config] Config write flash verify failed\n");
+    battery_feedback_status = 2;
     return false;
 }
 
 Config_body& get_config() {
     return config.body;
+}
+
+bool battery_feedback_enabled() {
+    return battery_feedback_enabled_value;
+}
+
+void set_battery_feedback_enabled(bool enabled) {
+    battery_feedback_enabled_value = enabled;
+    battery_feedback_status = 0;
+}
+
+uint8_t battery_feedback_save_status() {
+    return battery_feedback_status;
 }
 
 void set_config(const uint8_t *new_config, const uint16_t len) {
@@ -193,6 +236,7 @@ void set_config(const uint8_t *new_config, const uint16_t len) {
     const auto copy_len = len < sizeof(Config_body) ? len : sizeof(Config_body);
     memcpy(&config.body, new_config, copy_len);
     config_valid();
+    battery_feedback_status = 0;
 
     if (controller_connected && config.body.status_gpio_mode != STATUS_GPIO_MODE_BUTTON) {
         gpio_on_connect();
@@ -226,6 +270,7 @@ void set_config(const Config_body &new_config) {
 
     config.body = new_config;
     config_valid();
+    battery_feedback_status = 0;
 
     if (controller_connected && config.body.status_gpio_mode != STATUS_GPIO_MODE_BUTTON) {
         gpio_on_connect();

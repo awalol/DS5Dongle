@@ -15,8 +15,8 @@ struct __attribute__((packed)) Config_body {
     uint8_t speaker_gain; // [0,7] (0: auto)
     uint8_t inactive_time; // [0,60] min (0: disable)
     uint8_t disable_pico_led; // bool
-    uint8_t polling_rate_mode; // 0: 250Hz, 1: 500Hz, 2: real-time
-    uint8_t audio_buffer_length; // [16,127]
+    uint8_t polling_rate_mode; // 0: 250Hz fixed, 1: 500Hz fixed, 2: real-time, 3: 1000Hz fixed
+    uint8_t audio_buffer_length; // [16,128]
     uint8_t controller_mode; // 0: DS5, 1: DSE, 2: Auto
     uint8_t enable_usb_sn; // 0: disable,1: enable
     uint8_t ps_shortcut_enabled; // 0: disabled, 1: enabled (Xbox Game Bar via HID keyboard)
@@ -36,10 +36,16 @@ struct __attribute__((packed)) Config {
     Config_body body;
 };
 
+static_assert(sizeof(Config_body) == 22);
+static_assert(sizeof(Config) == 32);
+
 void config_default();
 void config_load();
 bool config_save();
 Config_body& get_config();
+bool battery_feedback_enabled();
+void set_battery_feedback_enabled(bool enabled);
+uint8_t battery_feedback_save_status(); // 0: unconfirmed, 1: verified, 2: failed
 void set_config(const uint8_t *new_config, const uint16_t len);
 void config_valid();
 void set_config(const Config_body &new_config);
