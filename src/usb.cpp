@@ -104,11 +104,14 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
 
                         volume[index] = static_cast<float>(*reinterpret_cast<int16_t const *>(pBuff)) / 256;
                         if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
+                            // -100..0 dB -> 0..100; the speaker amp tops out at 100 (0x64),
+                            // the headphone amp at 127 (0x7f), so scale for the headphones.
+                            const float level = std::clamp(100.0f + volume[index], 0.0f, 100.0f);
                             SetStateData state = {
                                 .AllowHeadphoneVolume = 1,
                                 .AllowSpeakerVolume = 1,
-                                .VolumeHeadphones = static_cast<uint8_t>(100.0f + volume[index]),
-                                .VolumeSpeaker = static_cast<uint8_t>(100.0f + volume[index]),
+                                .VolumeHeadphones = static_cast<uint8_t>(level * 127.0f / 100.0f + 0.5f),
+                                .VolumeSpeaker = static_cast<uint8_t>(level),
                             };
                             update_state(state);
                         }

@@ -237,7 +237,7 @@ FIELDS = [
     ("inactive_time",      "u8",    lambda v: 0 <= v <= 60,      "[0, 60] minutes (0 disable)"),
     ("disable_pico_led",   "u8",    lambda v: v in (0, 1),       "0/1"),
     ("polling_rate_mode",  "u8",    lambda v: v in (0, 1, 2),    "0:250Hz 1:500Hz 2:real-time"),
-    ("audio_buffer_length","u8",    lambda v: 16 <= v <= 128,    "[16, 128]"),
+    ("audio_buffer_length","u8",    lambda v: 32 <= v <= 128,    "[32, 128]"),
     ("controller_mode",    "u8",    lambda v: v in (0, 1, 2),    "0:DS5 1:DSE 2:Auto"),
     ("enable_usb_sn",      "u8",    lambda v: v in (0, 1),       "0/1 (USB serial number)"),
     ("enable_keyboard",    "u8",    lambda v: v in (0, 1),       "0/1 (USB keyboard interface)"),

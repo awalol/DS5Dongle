@@ -26,7 +26,7 @@ struct __attribute__((packed)) Config_body {
     uint8_t inactive_time; // [0,60] min (0: disable)
     uint8_t disable_pico_led; // bool
     uint8_t polling_rate_mode; // 0: 250Hz, 1: 500Hz, 2: 1000Hz, 3: Real-Time
-    uint8_t audio_buffer_length; // [16,127]
+    uint8_t audio_buffer_length; // [32,128]
     uint8_t controller_mode; // 0: DS5, 1: DSE, 2: Auto
     uint8_t enable_usb_sn; // 0: disable,1: enable
     uint8_t enable_keyboard; // bool: expose the USB keyboard interface

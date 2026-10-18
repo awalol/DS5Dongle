@@ -103,6 +103,10 @@ void config_valid() {
     if (body->audio_buffer_length < 16 || body->audio_buffer_length > 128) {
         body->audio_buffer_length = 48;
         printf("[Config] haptics_buffer_length is invalid\n");
+    } else if (body->audio_buffer_length < 32) {
+        // Below 32 the speaker garbles since the packed 0x39 report (#252).
+        body->audio_buffer_length = 32;
+        printf("[Config] audio_buffer_length raised to 32\n");
     }
     if (body->controller_mode > 2) {
         body->controller_mode = 2;

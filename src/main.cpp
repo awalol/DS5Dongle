@@ -274,6 +274,12 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     state.MicSelect = config.mic_select;
                     state.NoiseCancelEnable = 1;
                 }
+                // Linux hid-playstation sends AudioControl 0 / 0x30 on every
+                // headset plug/unplug; with NoiseCancelEnable cleared the
+                // speaker is attenuated (#263), so keep it set here too.
+                if (state.AllowAudioControl) {
+                    state.NoiseCancelEnable = 1;
+                }
                 if (config.lock_volume) {
                     state.AllowHeadphoneVolume = 0;
                     state.AllowMicVolume = 0;
