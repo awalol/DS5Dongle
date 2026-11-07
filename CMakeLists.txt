@@ -114,6 +114,7 @@ add_executable(ds5-bridge
         src/main.cpp
         src/usb.cpp
         src/audio.cpp
+        src/elastic.cpp
         src/bt.cpp
         src/button_functions.cpp
         src/config.cpp

@@ -24,6 +24,8 @@
 #include "pico/flash.h"
 #include "pico/util/queue.h"
 #include "config.h"
+#include "elastic.h"
+#include "pico/time.h"
 
 #define INPUT_CHANNELS    4
 #define OUTPUT_CHANNELS   2
@@ -272,64 +274,54 @@ void __not_in_flash_func(audio_loop)() {
     const bool mic_enabled = mic_active && cfg.mic_select != 3;
     const bool speaker_enabled = cfg.speaker_select != 3;
 
-    // --- BUGFIX: HARDWARE-THROTTLED DIRECT SLICE DRAINING ---
-    // Slaves the microphone transmission speed to the USB host clock.
-    // Instead of pushing entire decoded frames at once (which causes buffer
-    // overflows and digital echo on strict OS stacks like macOS CoreAudio), 
-    // we query TinyUSB's transmit FIFO capacity and feed it 1ms slices (192 bytes)
-    // precisely when the host is ready to consume them.
-
-    // Streaming state for hardware-throttled USB microphone transmission
-    static mic_decode_element active_mic_frame{};
-    static uint32_t active_frame_offset = 0;
-    static bool has_active_frame = false;
-
+    // Mic: one 1 ms slice per millisecond of the dongle clock, which the
+    // controller's mic follows. Refilling the IN FIFO whenever it has room
+    // instead makes TinyUSB's flow control read the full FIFO as a fast device
+    // clock and send 49 frames per USB frame, 2% more than the mic delivers,
+    // so about 20 ms of silence would go in every second. A slice is still
+    // sent while the elastic buffer refills (silence then), which keeps the
+    // stream alive for hosts such as macOS CoreAudio.
+    static bool mic_clock_running = false;
+    static uint64_t mic_t0_us = 0;
+    static uint64_t mic_slices = 0;
     if (mic_enabled) {
+        static mic_decode_element decoded{};
+        while (queue_try_remove(&mic_decode_fifo, &decoded)) {
+            mic_elastic_write(decoded.data, decoded.len / sizeof(int16_t));
+        }
         tu_fifo_t* tx_fifo = tud_audio_get_ep_in_ff();
-        
-        while (tx_fifo && tu_fifo_remaining(tx_fifo) >= 192) {
-            if (!has_active_frame) {
-                if (queue_try_remove(&mic_decode_fifo, &active_mic_frame)) {
-                    has_active_frame = true;
-                    active_frame_offset = 0;
-                } else {
-                    // Buffer Underrun Safety: If the decode queue runs dry, we MUST
-                    // feed the USB interface with silence to keep the stream alive.
-                    // This prevents macOS CoreAudio from resetting the driver.
-                    int16_t silence[96] = {0};
-                    tud_audio_write(silence, sizeof(silence));
-                    break; 
-                }
+        const uint64_t now = time_us_64();
+        if (!mic_clock_running && tx_fifo) {
+            // Start at TinyUSB's flow-control threshold so it sends nominal packets.
+            int16_t silence[96] = {0};
+            while (tu_fifo_count(tx_fifo) + 192 <= tud_audio_get_ep_in_fifo_threshold()) {
+                tud_audio_write(silence, sizeof(silence));
             }
-
-            if (has_active_frame) {
-                int16_t usb_tx_buf[96]; // 48 Stereo-Frames (192 Bytes)
-                const int16_t* src = active_mic_frame.data;
-                const uint32_t total_samples = active_mic_frame.len / sizeof(int16_t);
-                const uint32_t samples_needed = 48;
-
-                for (uint32_t i = 0; i < samples_needed; i++) {
-                    uint32_t src_idx = active_frame_offset + i;
-                    if (src_idx < total_samples) {
-                        int16_t sample = src[src_idx];
-                        usb_tx_buf[i * 2] = sample;     // Duplicate mono to Left
-                        usb_tx_buf[i * 2 + 1] = sample; // Duplicate mono to Right
-                    } else {
-                        usb_tx_buf[i * 2] = 0;
-                        usb_tx_buf[i * 2 + 1] = 0;
-                    }
-                }
-
-                tud_audio_write(usb_tx_buf, sizeof(usb_tx_buf));
-                active_frame_offset += samples_needed;
-
-                if (active_frame_offset >= total_samples) {
-                    has_active_frame = false; // Current frame completely drained
-                }
+            mic_clock_running = true;
+            mic_t0_us = now;
+            mic_slices = 0;
+        }
+        while (tx_fifo && mic_slices < (now - mic_t0_us) / 1000) {
+            if (tu_fifo_remaining(tx_fifo) < 192) {
+                // The host stopped reading: start over once it reads again.
+                mic_clock_running = false;
+                break;
             }
+            mic_slices++;
+            int16_t mono[48];
+            int16_t usb_tx_buf[96]; // 48 stereo frames (192 bytes)
+            if (mic_elastic_read(mono, 48)) {
+                for (int i = 0; i < 48; i++) {
+                    usb_tx_buf[i * 2] = mono[i];     // Duplicate mono to Left
+                    usb_tx_buf[i * 2 + 1] = mono[i]; // Duplicate mono to Right
+                }
+            } else {
+                memset(usb_tx_buf, 0, sizeof(usb_tx_buf));
+            }
+            tud_audio_write(usb_tx_buf, sizeof(usb_tx_buf));
         }
     } else {
-        has_active_frame = false;
+        mic_clock_running = false;
     }
 
     audio_bt_task();
