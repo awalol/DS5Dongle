@@ -440,7 +440,7 @@ uint8_t descriptor_configuration[] = {
     0x00, // bCountryCode
     0x01, // bNumDescriptors
     0x22, // bDescriptorType: Report
-    0x17, 0x00, // wDescriptorLength: 23 (sizeof desc_hid_report_consumer)
+    0x38, 0x00, // wDescriptorLength: 56 (sizeof desc_hid_report_consumer)
 
     // Endpoint Descriptor (HID IN: EP8)
     0x07, // bLength
@@ -496,7 +496,7 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     // interfaces (the LAST two descriptor blocks) when wake or the explicit keyboard
     // switch is on. With both off this is byte-identical to the base descriptor.
     const bool wake = get_config().enable_wake;
-    const bool kbd = wake || get_config().enable_keyboard;
+    const bool kbd = wake || get_config().enable_keyboard || get_config().sleep_on_dock;
     descriptor_configuration[7] = wake ? 0xE0 : 0xC0; // bmAttributes (REMOTE_WAKEUP bit)
     const uint16_t total = kbd ? CONFIG_DESC_LEN_TOTAL
                                : (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_SHORTCUT_HID);
@@ -941,24 +941,41 @@ uint8_t const desc_hid_report_kbd[] = {
 
 static_assert(sizeof(desc_hid_report_kbd) == 45, "keyboard report descriptor length must match config descriptor" );
 
-// 23-byte Consumer Control report descriptor: one 16-bit usage array, no Report ID.
-// Volume/mute/transport keys must come from this page -- Windows does not act on the
-// Keyboard-page equivalents (0x7F..0x81), which is why they get their own interface.
+// 56-byte Consumer + System Control report descriptor:
+// Report ID 1: Consumer Control (16-bit usage array)
+// Report ID 2: System Control (System Sleep / Power Down / Wake Up)
 uint8_t const desc_hid_report_consumer[] = {
     0x05, 0x0C,       // Usage Page (Consumer)
     0x09, 0x01,       // Usage (Consumer Control)
     0xA1, 0x01,       // Collection (Application)
+    0x85, 0x01,       //   Report ID (1)
     0x15, 0x00,       //   Logical Minimum (0)
-    // Logical Maximum item data is signed; 767 needs the 2-byte form regardless.
     0x26, SHORTCUT_CONSUMER_USAGE_MAX & 0xFF, SHORTCUT_CONSUMER_USAGE_MAX >> 8, //   Logical Maximum
     0x19, 0x00,       //   Usage Minimum (0)
     0x2A, SHORTCUT_CONSUMER_USAGE_MAX & 0xFF, SHORTCUT_CONSUMER_USAGE_MAX >> 8, //   Usage Maximum
     0x75, 0x10,       //   Report Size (16)
     0x95, 0x01,       //   Report Count (1)
-    0x81, 0x00,       //   Input (Data,Array,Abs) -- one usage at a time
+    0x81, 0x00,       //   Input (Data,Array,Abs)
+    0xC0,             // End Collection
+
+    0x05, 0x01,       // Usage Page (Generic Desktop)
+    0x09, 0x80,       // Usage (System Control)
+    0xA1, 0x01,       // Collection (Application)
+    0x85, 0x02,       //   Report ID (2)
+    0x15, 0x01,       //   Logical Minimum (1)
+    0x25, 0x03,       //   Logical Maximum (3)
+    0x75, 0x02,       //   Report Size (2 bits)
+    0x95, 0x01,       //   Report Count (1)
+    0x09, 0x81,       //   Usage (System Power Down)
+    0x09, 0x82,       //   Usage (System Sleep)
+    0x09, 0x83,       //   Usage (System Wake Up)
+    0x81, 0x00,       //   Input (Data,Array,Abs)
+    0x75, 0x06,       //   Report Size (6 bits padding)
+    0x95, 0x01,       //   Report Count (1)
+    0x81, 0x01,       //   Input (Const)
     0xC0              // End Collection
 };
-static_assert(sizeof(desc_hid_report_consumer) == 23, "consumer report descriptor length must match wDescriptorLength in config descriptor");
+static_assert(sizeof(desc_hid_report_consumer) == 56, "consumer report descriptor length must match wDescriptorLength in config descriptor");
 #endif
 
 // Invoked when received GET HID REPORT DESCRIPTOR

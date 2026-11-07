@@ -27,6 +27,7 @@
 #include "config.h"
 #include "cmd.h"
 #include "status_gpio.h"
+#include "pico/time.h"
 #if ENABLE_BATT_LED
 #include "battery_led.h"
 #endif
@@ -113,15 +114,32 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
             update_state(state);
         }*/
 
-        // Dock: USB power without USB data (a host cable sets both); latch so
-        // one dock event sends one disconnect.
+        // Dock: USB power without USB data (a host cable sets both); require
+        // sustained dock contact for 2 seconds before triggering sleep / disconnect.
+        // This prevents accidental triggers if the controller is momentarily placed
+        // or adjusted in the cradle.
         static bool dock_latched = false;
+        static uint64_t dock_start_us = 0;
         const bool docked = (data[56] >> 6) & 1;
+        const uint64_t now_us = time_us_64();
         if (!docked) {
             dock_latched = false;
-        } else if (!dock_latched && get_config().disconnect_on_dock && bt_disconnect()) {
-            dock_latched = true;
-            printf("[BT] Dock detect (status1=0x%02X), disconnect\n", data[56]);
+            dock_start_us = 0;
+        } else if (get_config().sleep_on_dock || get_config().disconnect_on_dock) {
+            if (dock_start_us == 0) {
+                dock_start_us = now_us;
+            } else if (!dock_latched && (now_us - dock_start_us >= 2000000)) { // 2s continuous dock delay
+                dock_latched = true;
+                printf("[BT] Dock confirmed (status1=0x%02X)\n", data[56]);
+                if (get_config().sleep_on_dock) {
+                    printf("[Dock] Triggering host sleep\n");
+                    trigger_host_sleep();
+                }
+                if (get_config().disconnect_on_dock) {
+                    printf("[Dock] Disconnecting BT\n");
+                    bt_disconnect();
+                }
+            }
         }
 
         // Wake-on-PS must observe every BT input report regardless of polling

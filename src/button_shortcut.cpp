@@ -89,6 +89,8 @@ static bool keyboard_clear_pending = false;
 static bool consumer_clear_pending = false;
 static bool keyboard_dirty = false;
 static bool wake_owned_keyboard = false;
+static bool host_sleep_pending = false;
+static bool host_sleep_active = false;
 
 static bool shortcuts_available() {
     return !usb_keyboard_only && !usb_reconfiguring && tud_mounted() && !tud_suspended();
@@ -178,8 +180,16 @@ static bool has_double_tap_partner(uint8_t slot, const ButtonShortcut &shortcut)
 // Release only the timed pulse; keyboard holds remain in the merged report.
 static bool send_release(uint8_t instance) {
     if (instance == CONSUMER_INSTANCE) {
+        if (host_sleep_active) {
+            uint8_t zero = 0;
+            if (tud_hid_n_report(CONSUMER_INSTANCE, 2, &zero, sizeof(zero))) {
+                host_sleep_active = false;
+                return true;
+            }
+            return false;
+        }
         uint16_t usage = 0;
-        return tud_hid_n_report(CONSUMER_INSTANCE, 0, &usage, sizeof(usage));
+        return tud_hid_n_report(CONSUMER_INSTANCE, 1, &usage, sizeof(usage));
     }
     keyboard_dirty = true;
     return send_keyboard_state(false);
@@ -203,7 +213,7 @@ static bool send_consumer(const ButtonShortcut &shortcut) {
 
     // Copy out of the packed struct before taking an address.
     uint16_t usage = shortcut.consumer.usage;
-    if (!tud_hid_n_report(CONSUMER_INSTANCE, 0, &usage, sizeof(usage))) return false;
+    if (!tud_hid_n_report(CONSUMER_INSTANCE, 1, &usage, sizeof(usage))) return false;
 
     start_pulse(CONSUMER_INSTANCE);
     return true;
@@ -371,6 +381,8 @@ void button_shortcut_reset() {
     pending_mask = 0;
     engaged_mask = 0;
     chord_claimed_mask = 0;
+    host_sleep_pending = false;
+    host_sleep_active = false;
     for (uint8_t i = 0; i < BUTTON_SHORTCUT_COUNT; ++i) {
         tap_count[i] = 0;
         tap_deadline[i] = nil_time;
@@ -411,6 +423,14 @@ void button_shortcut_task() {
         }
         // A busy consumer endpoint must not delay a physical keyboard release.
     }
+    if (host_sleep_pending && !release_pending && !consumer_clear_pending && tud_hid_n_ready(CONSUMER_INSTANCE)) {
+        uint8_t sleep_cmd = 0x02; // System Sleep (Report ID 2: System Control)
+        if (tud_hid_n_report(CONSUMER_INSTANCE, 2, &sleep_cmd, sizeof(sleep_cmd))) {
+            host_sleep_active = true;
+            start_pulse(CONSUMER_INSTANCE);
+            host_sleep_pending = false;
+        }
+    }
     send_keyboard_state(release_pending && release_instance == KEYBOARD_INSTANCE);
     dispatch_pending(); // Retry queued pulses even if Bluetooth stops reporting.
 
@@ -432,6 +452,11 @@ void button_shortcut_start_learning() {
     shortcut_learning = true;
     shortcut_learning_reset = false;
     shortcut_learning_until = make_timeout_time_ms(SHORTCUT_LEARNING_WINDOW_MS);
+}
+
+void trigger_host_sleep() {
+    host_sleep_pending = true;
+    button_shortcut_task();
 }
 
 #endif // ENABLE_WAKE_HID

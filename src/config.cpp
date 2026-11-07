@@ -152,6 +152,10 @@ void config_valid() {
         body->disconnect_on_dock = 0;
         printf("[Config] disconnect_on_dock is invalid\n");
     }
+    if (body->sleep_on_dock > 1) {
+        body->sleep_on_dock = 0;
+        printf("[Config] sleep_on_dock is invalid\n");
+    }
     button_remap_valid();
     shortcut_valid();
 }
@@ -258,8 +262,13 @@ void set_config(const uint8_t *new_config, const uint16_t len) {
     const bool controller_connected = bt_is_connected();
     gpio_on_disconnect();
 
+    const uint8_t prev_sleep_on_dock = config.body.sleep_on_dock;
     const auto copy_len = len < sizeof(Config_body) ? len : sizeof(Config_body);
     memcpy(&config.body, new_config, copy_len);
+    // If set from legacy tool/web UI (which only sends 24 bytes), preserve sleep_on_dock
+    if (len <= 24) {
+        config.body.sleep_on_dock = prev_sleep_on_dock;
+    }
     config_valid();
 
     if (controller_connected && config.body.status_gpio_mode != STATUS_GPIO_MODE_BUTTON) {

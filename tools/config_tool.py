@@ -250,6 +250,7 @@ FIELDS = [
     ("status_gpio_mode",   "u8",    lambda v: v in (0, 1),       "0:pull high 1:200ms button pulse"),
     ("packet_mode",        "u8",    lambda v: v in (0, 1),       "0:double packet 1:single packet"),
     ("disconnect_on_dock", "u8",    lambda v: v in (0, 1),       "0/1 (drop the BT link while the controller sits on a charger/dock)"),
+    ("sleep_on_dock",      "u8",    lambda v: v in (0, 1),       "0/1 (suspend host PC when the controller sits on a dock)"),
 ]
 FIELD_NAMES = [f[0] for f in FIELDS]
 # Little-endian, no padding -- matches __attribute__((packed)) Config_body.
@@ -328,9 +329,13 @@ def read_config(dev):
         sys.exit(f"Failed reading config report 0x{REPORT_GET_CONFIG:02X}: {exc}")
     if not data:
         sys.exit("Empty response reading config (report 0xF7). Is the firmware current?")
-    body = bytes(data[1:1 + BODY_SIZE]) if data[0] == REPORT_GET_CONFIG else bytes(data[:BODY_SIZE])
-    if len(body) < BODY_SIZE:
-        sys.exit(f"Short config read: got {len(body)} bytes, expected {BODY_SIZE}.")
+    raw_body = bytes(data[1:]) if data[0] == REPORT_GET_CONFIG else bytes(data)
+    if len(raw_body) < 24:
+        sys.exit(f"Short config read: got {len(raw_body)} bytes, expected at least 24.")
+    # If reading from older firmware that lacks newer fields (e.g. sleep_on_dock), pad with 0
+    if len(raw_body) < BODY_SIZE:
+        raw_body = raw_body + b"\x00" * (BODY_SIZE - len(raw_body))
+    body = raw_body[:BODY_SIZE]
     return unpack_config(body)
 
 def read_version(dev):
