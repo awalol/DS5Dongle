@@ -1,4 +1,4 @@
-# ESP32-S31-Function-CoreBoard-1 defaults.
+# ESP32-S31 defaults (Maple ESP32S31 Alef, ESP32-S31-Function-CoreBoard-1).
 
 CONFIG_IDF_TARGET="esp32s31"
 

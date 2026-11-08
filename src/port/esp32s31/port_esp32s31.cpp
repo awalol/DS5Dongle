@@ -1,7 +1,8 @@
 // ESP32-S31 backend for the platform abstraction layer.
 //
-// Target board: ESP32-S31-Function-CoreBoard-1 (ESP32-S31-WROOM-3, 16MB flash,
-// 16MB PSRAM). Pin assignments live in board_esp32s31.h.
+// Target board: Maple ESP32S31 Alef; the ESP32-S31-Function-CoreBoard-1 runs the
+// same image (both ESP32-S31-WROOM-3, 16MB flash, 16MB PSRAM). Pin assignments
+// live in board_esp32s31.h.
 
 #include "../port.h"
 #include "board_esp32s31.h"
@@ -284,10 +285,11 @@ led_strip_handle_t g_led = nullptr;
 } // namespace
 
 void led_init() {
-    // GPIO60 reaches the WS2812 through Q1 (LBSS138) as a level shifter to 5V.
-    // That stage is NON-inverting: the gate is tied to ESP_3V3, GPIO60 drives
-    // the source and RGB_CTRL is the drain with R13 pulling to VCC_5V, so
-    // RGB_CTRL simply follows GPIO60. Do not set invert_out.
+    // Do not set invert_out on either board. Alef: GPIO60 drives the SK6805
+    // directly at 3.3 V. CoreBoard-1: GPIO60 reaches the WS2812 through Q1
+    // (LBSS138) as a level shifter to 5V, and that stage is NON-inverting: the
+    // gate is tied to ESP_3V3, GPIO60 drives the source and RGB_CTRL is the
+    // drain with R13 pulling to VCC_5V, so RGB_CTRL simply follows GPIO60.
     const led_strip_config_t strip_cfg = {
         .strip_gpio_num = BOARD_STATUS_LED_GPIO,
         .max_leds = 1,
@@ -332,12 +334,14 @@ usb_phy_handle_t g_usb_phy = nullptr;
 void board_init() {
     // Raw TinyUSB, not esp_tinyusb, so nothing else brings the OTG PHY up --
     // do it before tusb_init(). Device mode on the UTMI PHY is purely a
-    // software choice; the Type-A receptacle does not force host role.
+    // software choice; neither board's connector forces host role (the Alef's
+    // "HOST" Type-C, the CoreBoard-1's Type-A receptacle).
     //
     // otg_io_conf stays null deliberately: unset means drvvbus is never routed
-    // and the SoC never drives VBUS. Board VBUS comes from a separate TPS2051C,
-    // hence the VBUS-disconnected host cable. With no VBUS sense the device
-    // attaches whenever powered rather than when the host appears.
+    // and the SoC never drives VBUS. On the CoreBoard-1 the receptacle's VBUS
+    // comes from a separate TPS2051C, hence its VBUS-disconnected host cable.
+    // With no VBUS sense the device attaches whenever powered rather than when
+    // the host appears; on the Alef, powered from HOST, those coincide.
     const usb_phy_config_t phy_cfg = {
         .controller = USB_PHY_CTRL_OTG,
         .target = USB_PHY_TARGET_UTMI,

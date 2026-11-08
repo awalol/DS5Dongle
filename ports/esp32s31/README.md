@@ -1,116 +1,98 @@
-# ESP32-S31-Function-CoreBoard-1 port
+# ESP32-S31 port
 
-The firmware runs on this target. Verified on hardware: pairing, reconnect after
-both a PS-hold power-cycle and a dongle replug, USB enumeration of the emulated
+Target board: the **Maple ESP32S31 Alef** (AnalogLamb / XPU Labs), a
+dongle-style breakout with the S31's high-speed USB on a Type-C port. The
+**Espressif ESP32-S31-Function-CoreBoard-1** runs the same image -- see
+[Also runs on](#also-runs-on-esp32-s31-function-coreboard-1) -- and is where the
+port was developed.
+
+Verified on hardware, on the Function-CoreBoard-1: pairing, reconnect after both
+a PS-hold power-cycle and a dongle replug, USB enumeration of the emulated
 controller, speaker and microphone audio under sustained load, and the lightbar
-handover after a power-cycle. Read the cabling note below before wiring anything
-up.
+handover after a power-cycle. The Alef carries the same module wired to the same
+pins, so nothing in the firmware differs between the two; only the cabling does.
 
 The Pico2W / Waveshare RP2350B builds are unaffected; they still build from the
 top-level `CMakeLists.txt` and were verified unchanged by this work.
 
-## USB cabling: use a data-only A-to-A cable
+## The Alef board
 
-The dongle must appear to the PC as a USB **device**. That works on this board,
-but the cable matters.
+| | |
+| --- | --- |
+| Module | ESP32-S31-WROOM-3: 16 MB quad flash, 16 MB octal PSRAM |
+| BOOT button | IO61 to GND, active low |
+| Status LED | SK6805 addressable RGB, data on IO60, 3.3 V |
+| `HOST` Type-C | the S31's USB OTG (UTMI high-speed PHY) -- **the PC cable goes here** |
+| `UART` Type-C | CH343P USB-to-UART with auto-download -- flashing and the console |
 
-The ESP32-S31 has one OTG peripheral with only a UTMI (high-speed) PHY —
-`soc_caps.h`: `SOC_USB_UTMI_PHY_NUM 1`, `SOC_USB_FSLS_PHY_NUM 0` — and on this
-board `USB_DP`/`USB_DM` go to the Type-A receptacle (Port 4). Neither Type-C
-port reaches OTG: Port 5 is USB Serial/JTAG, Port 6 the USB-to-UART bridge.
+Pin assignments are from the schematic excerpts in the vendor's user guide
+(`xpulabs/docs_en`, `maple_esp32/src/maple_esp32s31`): BOOT1 on IO61, D2
+(SK6805-2427) DIN on IO60, and the module's `USB_DP`/`USB_DM` on the `HOST`
+connector. They match `src/port/esp32s31/board_esp32s31.h`, which is why one
+image serves both boards.
 
-**A Type-A receptacle does not force host role.** For the UTMI PHY, device vs
-host is a software choice — `usb_phy.c`'s set-mode path simply disconnects the
-D+/D- pulldowns for device mode and returns, with no ID pin or VBUS-valid signal
-involved. D+, D- and GND are symmetric, so the connector shell is irrelevant to
-signalling. `board_init()` already selects `USB_OTG_MODE_DEVICE`.
+### Cabling
 
-The one genuine conflict is **VBUS**: this board sources 5 V on that port
-through a TPS2051C, and so does the PC. Tying two 5 V supplies together is out
-of spec and can back-feed the host port.
+- **As a dongle:** one cable from the PC to the `HOST` port. That port also feeds
+  the board's 3.3 V regulator, so it powers the board and carries the controller
+  data over the high-speed peripheral. Use a USB-A-to-C cable to start with: a
+  Type-A host port supplies VBUS unconditionally, whereas a C-to-C cable only
+  gets VBUS if the board presents Rd on CC, and the published material does not
+  show the `HOST` port's CC network.
+- **To flash or watch the console:** the `UART` port. The CH343P's auto-download
+  circuit straps IO61 itself, so `idf.py flash` needs no button presses.
+- **Not both into a PC at once.** The vendor's block diagram routes the `UART`
+  port's 5 V to the `HOST` port, the arrangement that lets `HOST` power a device
+  in host mode. With both cabled to computers, that path can drive 5 V back into
+  the PC's port. Debug with the `UART` port alone, or power the board from a
+  charger rather than a second PC port.
 
-So:
+The S31 has no FS/LS PHY (`soc_caps.h`: `SOC_USB_UTMI_PHY_NUM 1`,
+`SOC_USB_FSLS_PHY_NUM 0`), and for the UTMI PHY device vs host is purely a
+software choice: `usb_phy.c`'s set-mode path disconnects the D+/D- pulldowns for
+device mode and returns, with no ID pin or VBUS-valid signal involved. The
+`HOST` silkscreen describes the vendor's intended use, not a hardware role;
+`board_init()` selects `USB_OTG_MODE_DEVICE`.
 
-1. Use an A-to-A cable with **VBUS isolated** — D+, D- and GND pass through.
+With no VBUS sense wired, the device attaches whenever it is powered rather than
+when a host appears. On the Alef, powered from `HOST`, those are the same event.
+
+## Also runs on: ESP32-S31-Function-CoreBoard-1
+
+Same image, different cable. On the CoreBoard-1 `USB_DP`/`USB_DM` go to the
+Type-A receptacle (Port 4); neither Type-C reaches OTG (Port 5 is the
+fixed-function USB Serial/JTAG block, Port 6 a USB-to-UART bridge). That Type-A
+port **sources 5 V** through U5, a TPS2051C whose active-high `EN` is strapped to
+`VCC_5V` by R25 (10k, populated; the R29 pull-down is not fitted) and reaches no
+GPIO, so firmware cannot switch it off. Verified on hardware: a USB mouse plugged
+into that port powers up.
+
+So on that board:
+
+1. Use an A-to-A cable with **VBUS isolated**. Tape over pin 1 (the VBUS contact)
+   of one plug rather than cutting it. Off-the-shelf "USB data blockers" do the
+   opposite, passing power and blocking data.
 2. Power the board from either Type-C port.
 
-**VBUS on that port is always live — confirmed from the schematic.** U5
-(TPS2051CDBVR) has its active-high `EN` (pin 4) on the `VBUS_EN` net, which is
-pulled up to `VCC_5V` through R25 (10k, populated); the pull-down R29 (10k) is
-marked NC and not fitted. `VBUS_EN` reaches no GPIO, so no firmware change can
-switch it off. Verified on hardware: a USB mouse plugged into the Type-A port
-powers up.
+The TPS2051C's reverse blocking protects the board from host VBUS. It does
+nothing to stop the board driving 5 V out into the host port, which is the
+direction that matters. The hardware alternative to taping is removing R25 and
+fitting R29, which straps `EN` low.
 
-Isolating VBUS in the cable is therefore mandatory, not conditional. (TP1 is a
-test point directly on `VBUS_OUT` if you want to measure it.)
+A single-PC-port Y-cable also works there: D+, D- and GND from the PC to the
+Type-A port (no VBUS), and VBUS/GND from the same plug to the J2 5 V header
+(pins 39/40, GND 37/38). Watch the 500 mA budget (that board has an Ethernet
+PHY), and do not leave a Type-C plugged in at the same time.
 
-To isolate, tape over pin 1 (the VBUS contact) of one Type-A plug rather than
-cutting — reversible and keeps the cable usable. Note that off-the-shelf "USB
-data blockers" do the opposite of what is wanted here: they pass power and block
-data.
+Bit-banging USB over GPIO is not an alternative on either board. Low speed has
+no isochronous endpoints, so the audio class is impossible and the 64-byte DS5
+reports do not fit; full speed needs NRZI, bit stuffing and CRC at ~20 CPU
+cycles per bit, which the RP2040 only manages through PIO, and the S31 has no
+equivalent.
 
-Note the asymmetry: the TPS2051C's reverse blocking protects the *board* from
-host VBUS. It does nothing to stop the board driving 5 V *out* into the host
-port, which is the direction that matters here.
-
-### Single-PC-port option (Y-cable)
-
-If two cables is unacceptable, one custom cable off a single PC port works,
-because J2 exposes 5 V (pins 39/40, GND on 37/38) and the user guide lists
-"5V and G (GND) pin headers" as a supported power input:
-
-- D+, D-, GND from the PC plug -> the board's Type-A port (omit its VBUS branch)
-- VBUS, GND from the same PC plug -> J2 5 V and G
-
-That powers the board and carries data over the real high-speed peripheral.
-Watch the current budget (USB 2.0 gives 500 mA; this board has an Ethernet PHY
-and PSRAM), and do not leave a Type-C plugged in at the same time -- that is two
-sources into one rail. Bonus: with VBUS present at the header you can divide it
-down to a spare GPIO and pass it as `bvalid_io_num`, which fixes the
-attach-detection caveat above.
-
-Bit-banging USB over GPIO is not a workable alternative. Low speed -- the only
-speed realistically bit-bangable -- has no isochronous endpoints at all (control
-and interrupt only, 8-byte packets), so the audio class is impossible and the
-64-byte DS5 reports do not fit. Full speed needs NRZI, bit stuffing, CRC and
-turnaround responses at ~20 CPU cycles per bit; the RP2040 only manages it via
-PIO, and the S31 has no equivalent (PARLIO is unidirectional parallel-with-clock,
-RMT is pulse gen/capture, BitScrambler is a data transform). It would also mean
-discarding a working USB 2.0 high-speed peripheral.
-
-### Why not a Type-C port
-
-Neither Type-C port can carry the controller data, so a single-*connector* setup
-is not available. They reach different peripherals: Port 5 is the S31's USB
-Serial/JTAG block, which is fixed-function (CDC-ACM + JTAG, descriptors in
-hardware — the driver exposes no descriptor API), and Port 6 goes to a separate
-USB-to-UART bridge chip that never touches the S31's USB pins. Only the Type-A
-port reaches USB OTG, the one peripheral TinyUSB's device stack can drive.
-Putting OTG on a Type-C would mean rewiring `USB_DP`/`USB_DM` to a new
-connector, plus 5.1k Rd pulldowns on CC1/CC2 to present as a device port — a
-custom board, not a mod to this one.
-
-You cannot power the board *through* the Type-A port instead. Its 5 V comes
-from the board rail via the TPS2051C, so it is an output; TI lists reverse
-current blocking as a feature of that part, so host VBUS cannot flow back into
-the rail. Leaving VBUS connected therefore buys nothing and still lets the board
-push 5 V into the host port. Expect two cables: Type-C for power (wanted anyway
-for flashing and the serial monitor) and the data-only A-to-A to the PC.
-
-The SoC never drives VBUS itself: `otg_io_conf` is left null, so `drvvbus` is
-never routed out — the self-powered-device shape IDF documents as
-`USB_PHY_SELF_POWERED_DEVICE()`. The 5 V on the receptacle comes from the
-TPS2051C alone, and with VBUS cut it simply goes nowhere.
-
-Known limitation: with no VBUS sense the device attaches whenever it is powered
-rather than when the host appears. To do it properly, wire the connector's VBUS
-through a divider to a spare GPIO and pass it as `bvalid_io_num`.
-
-The TPS2051C's enable is **not** GPIO-controlled — see above; it is strapped
-high by R25 with the R29 pull-down unpopulated. Firmware cannot drop VBUS. The
-hardware alternative to taping the cable is to remove R25 and populate R29,
-which straps `EN` low; taping is easier and reversible, so it is the
-recommendation.
+The SoC never drives VBUS on either board: `otg_io_conf` is left null, so
+`drvvbus` is never routed out -- the self-powered-device shape IDF documents as
+`USB_PHY_SELF_POWERED_DEVICE()`.
 
 ## Why the ESP32-S31 at all
 
@@ -169,7 +151,7 @@ one function to true to get parity back.
 
 ## Status
 
-Builds clean: `ds5-bridge-esp32s31.bin`, 962 KB, with the BR/EDR controller and
+Builds clean: `ds5-bridge-esp32s31.bin`, about 1 MB, with the BR/EDR controller and
 BTstack Classic linked in.
 
 Working:
@@ -485,10 +467,10 @@ fresh PS+Share pair, PS-button reconnect, USB enumeration, speaker, mic.
   more `#ifdef`s. Part of that lives in the web config repo, so it is not
   self-contained here.
 
-  Deliberately deferred. The S31 is a development board, not something anyone
-  buys to run this firmware, and the GPIO header is not the reason to use it.
-  Worth doing when dongle-style boards exist that people actually wire things
-  to -- at which point the Waveshare target needs it too.
+  Deliberately deferred. The Alef is dongle-style, but the header is still not
+  why anyone would pick it, and the fix spans the web config repo. Worth doing
+  once someone actually wires a status GPIO on an S31 board -- at which point
+  the Waveshare target needs it too.
 - **`reboot_to_bootloader()` falls back to a plain restart.** For S31 this is
   `LP_SYSTEM_REG_SYS_CTRL_REG` bit 2 `FORCE_DOWNLOAD_BOOT` (P4-style LP_SYSTEM,
   not the S3's `RTC_CNTL`) followed by a reset. Unverified — confirm against the

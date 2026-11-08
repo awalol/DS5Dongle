@@ -14,8 +14,8 @@ void clocks_init();
 // RP2350 has no dedicated user button: BOOTSEL is read by briefly floating the
 // QSPI CSn line, which requires parking the other core (flash_safe_execute).
 // That makes this call comparatively expensive, so keep it on the existing
-// ~10 Hz poll cadence rather than sampling it freely. The
-// ESP32-S31-Function-CoreBoard-1 has a real BOOT button and reads it cheaply.
+// ~10 Hz poll cadence rather than sampling it freely. The ESP32-S31 boards
+// have a real BOOT button and read it cheaply.
 bool boot_button_pressed();
 
 // Register the calling core as a flash-safe victim, so a flash erase/program on

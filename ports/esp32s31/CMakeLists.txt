@@ -1,4 +1,5 @@
-# ESP-IDF project for the ESP32-S31-Function-CoreBoard-1 target.
+# ESP-IDF project for the ESP32-S31 target (Maple ESP32S31 Alef; also runs on
+# the ESP32-S31-Function-CoreBoard-1).
 #
 # Build with:
 #   idf.py -C ports/esp32s31 set-target esp32s31
