@@ -2,22 +2,25 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include "port/port.h"
+
 #include <algorithm>
 
 #include "bt.h"
 #include "tusb.h"
-#include "bsp/board_api.h"
 #include "config.h"
 #include "utils.h"
 #include "usb.h"
 #include "wake.h"
 #include "audio.h"
-#include "pico/time.h"
 
 // USB descriptor mode: true exposes only the wake keyboard; false exposes the full device.
 bool usb_keyboard_only = false;
 // True from deliberate USB disconnect until remount, preventing reports to stale HID interfaces.
 bool usb_reconfiguring = false;
+#if defined(PORT_PLATFORM_ESP32S31)
+static uint32_t usb_reconnect_at_ms = 0; // pending tud_connect(); 0 = none
+#endif
 
 uint8_t usb_keyboard_instance() { return usb_keyboard_only ? 0 : 1; }
 
@@ -29,9 +32,26 @@ void usb_reconnect(bool keyboard_only) {
     extern bool spk_active;
     spk_active = false;
     set_mic_active(false);
-    sleep_ms(150);
+#if defined(PORT_PLATFORM_ESP32S31)
+    // Reconnect from the main loop instead of sleeping here. This runs from the
+    // Bluetooth event handler (the 0x20 feature reply), and 150 ms of blocking
+    // there stalled the BT pump long enough to overflow the HCI receive ring --
+    // ~50 inbound packets dropped on every connect.
+    usb_reconnect_at_ms = port::now_ms() + 150;
+    if (usb_reconnect_at_ms == 0) usb_reconnect_at_ms = 1;
+#else
+    port::delay_ms(150);
+    tud_connect();
+#endif
+}
+
+#if defined(PORT_PLATFORM_ESP32S31)
+void usb_reconnect_task() {
+    if (usb_reconnect_at_ms == 0 || port::now_ms() < usb_reconnect_at_ms) return;
+    usb_reconnect_at_ms = 0;
     tud_connect();
 }
+#endif
 
 uint8_t mute[2] = {}; // 0: SPEAKER(0x02) 1: MIC(0x05)
 float volume[2] = {0.0f,48.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)

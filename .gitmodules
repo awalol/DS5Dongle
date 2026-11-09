@@ -4,3 +4,7 @@
 [submodule "lib/opus"]
 	path = lib/opus
 	url = https://github.com/xiph/opus
+[submodule "lib/btstack"]
+	path = lib/btstack
+	url = https://github.com/bluekitchen/btstack.git
+	branch = master

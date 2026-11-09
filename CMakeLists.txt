@@ -126,7 +126,16 @@ add_executable(ds5-bridge
         src/button_remap.h
         src/button_utils.cpp
         src/button_utils.h
+        # Platform abstraction layer; the ESP32-S31 target selects the
+        # esp32s31 backend instead (see ports/esp32s31/CMakeLists.txt).
+        src/port/pico/port_pico.cpp
 )
+
+target_include_directories(ds5-bridge PRIVATE src)
+
+# Portable spelling of the firmware version string; the ESP32-S31 build defines
+# this directly since it has no pico-sdk program metadata.
+target_compile_definitions(ds5-bridge PRIVATE DS5_FIRMWARE_VERSION=PICO_PROGRAM_VERSION_STRING)
 
 if (ENABLE_DEBUG)
         target_sources(ds5-bridge PRIVATE src/debug.cpp)
