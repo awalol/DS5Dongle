@@ -282,6 +282,18 @@ void gpio_write(uint32_t pin, bool level) {
 
 namespace {
 led_strip_handle_t g_led = nullptr;
+// Dim white by default: the board LED is far brighter than the Pico2W's.
+constexpr uint8_t kLedDefaultLevel = 4;
+// A mirrored colour is scaled so full scale (0xFF) lands here, a little above
+// the default white since a single channel looks dimmer than three.
+constexpr uint8_t kLedColorMax = 12;
+uint8_t g_on_r = kLedDefaultLevel, g_on_g = kLedDefaultLevel, g_on_b = kLedDefaultLevel;
+bool g_lit = false;
+
+uint8_t led_scale(uint8_t c) {
+    const uint8_t v = static_cast<uint8_t>((c * kLedColorMax + 127) / 255);
+    return (c != 0 && v == 0) ? 1 : v; // a dim channel stays visible
+}
 } // namespace
 
 void led_init() {
@@ -306,15 +318,26 @@ void led_init() {
 }
 
 void led_set(bool on) {
+    g_lit = on;
     if (!g_led) return;
     if (on) {
-        // Dim white: the board LED is far brighter than the Pico2W's, and this
-        // interface only promises on/off.
-        led_strip_set_pixel(g_led, 0, 8, 8, 8);
+        led_strip_set_pixel(g_led, 0, g_on_r, g_on_g, g_on_b);
         led_strip_refresh(g_led);
     } else {
         led_strip_clear(g_led);
     }
+}
+
+void led_set_on_color(uint8_t r, uint8_t g, uint8_t b) {
+    g_on_r = led_scale(r);
+    g_on_g = led_scale(g);
+    g_on_b = led_scale(b);
+    if (g_lit) led_set(true);
+}
+
+void led_reset_on_color() {
+    g_on_r = g_on_g = g_on_b = kLedDefaultLevel;
+    if (g_lit) led_set(true);
 }
 
 // ---------------------------------------------------------------------------- USB

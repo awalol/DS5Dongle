@@ -57,6 +57,11 @@ static bd_addr_t current_device_addr;
 // overriding it. Defaults to the firmware colour for the case where the pulse
 // lands before the host has said anything.
 static uint8_t host_led_r = 0xff, host_led_g = 0xd7, host_led_b = 0x00;
+// Same for the player indicators. Steam sets them once, about two seconds after
+// connect -- while the controller still owns its LEDs -- and never again, so the
+// handover has to re-apply them or they stay on the pairing animation.
+static bool host_player_set = false;
+static uint8_t host_player_bits = 0; // PlayerLight1..5 in bits 0..4, PlayerLightFade in bit 5
 #endif
 static bool device_found = false;
 static bool new_pair = false; // 只有新匹配的设备才用创建channel，自动重连走的是service
@@ -119,14 +124,28 @@ static bool bt_has_stored_link_key() {
 #endif
 
 #if defined(PORT_PLATFORM_ESP32S31)
-// One-shot "release the lights" pulse after connect. The DualSense holds its
-// LEDs until the host pulses ResetLights (src/utils.h bit 1.3), and the pulse
-// is ignored during the connect animation -- hence the delay, since the init
-// report goes out ~2ms after the channel opens.
-static constexpr uint32_t kReleaseLightsDelayMs = 3000;
-static constexpr uint32_t kReleaseLightsPaintMs = 120; // gap between pulse and paint
+// Lightbar handover, sent on every link. A DualSense that reconnects WITHOUT
+// having rebooted (PS-hold after a fresh pairing, or the dongle resetting under a
+// running pad) keeps its blue connect pulse and ignores every colour, including
+// after a ResetLights pulse. DS4Windows (DualSenseDevice.cs) documents why: the
+// fade-out is "scheduled after fade-in completion", and "only a fade-out can
+// cancel the pulse (neither [ResetLights] nor turning this off will cancel it!)".
+// So: fade-in alone, then fade-out with the host colour. The controller queues
+// the fade-out behind its own fade-in, so the two go out on consecutive main-loop
+// passes; waits of 3 s, 1 s and none all hardware-verified on the Alef, on a
+// fresh pair, a PS-hold reconnect (the case that stuck before) and a power-off.
+static constexpr uint32_t kHandoverFallbackMs = 3000; // if no 0x31 input arrives
+static constexpr uint32_t kRepaintAfterMs = 150;
 static uint32_t release_lights_at_ms = 0;
+// SDL's gate for the pad's own connect animation: wait for the input report's
+// sensor timestamp to reach 10200000 (it is already past it on a pad that did not
+// reboot, so there the handover starts on the first 0x31 input).
+static constexpr uint32_t kConnectAnimationDoneTs = 10200000;
+static bool release_wait_input = false;
 static uint8_t release_lights_stage = 0;
+// Set once the handover is done, from when the dongle's own RGB LED mirrors the
+// controller's lightbar colour.
+static bool lights_handed_over = false;
 #endif
 
 // LED triple-flash confirmation state for clear-all action
@@ -447,10 +466,20 @@ void bt_note_host_led(uint8_t r, uint8_t g, uint8_t b) {
     host_led_r = r;
     host_led_g = g;
     host_led_b = b;
+    if (lights_handed_over) port::led_set_on_color(r, g, b);
 #else
     // RP2350 hands the lightbar over unprompted, so nothing needs the colour
     // remembered. A no-op here keeps the call site in main.cpp unguarded.
     (void) r; (void) g; (void) b;
+#endif
+}
+
+void bt_note_host_player(uint8_t bits) {
+#if defined(PORT_PLATFORM_ESP32S31)
+    host_player_bits = bits & 0x3F;
+    host_player_set = true;
+#else
+    (void) bits; // as bt_note_host_led()
 #endif
 }
 
@@ -508,6 +537,40 @@ static bool bt_try_create_connection() {
     return rc == ERROR_CODE_SUCCESS;
 }
 
+#if defined(PORT_PLATFORM_ESP32S31)
+// The handover reports go out as 0x31, the DualSense's plain Bluetooth output
+// report -- the one forward_output_report() uses for the host's own reports.
+static void send_state_0x31(const SetStateData &state) {
+    uint8_t pkt[78]{};
+    pkt[0] = 0x31;
+    pkt[1] = reportSeqCounter << 4;
+    reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
+    pkt[2] = 0x10;
+    memcpy(pkt + 3, &state, sizeof(SetStateData));
+    bt_write(pkt, sizeof(pkt));
+}
+
+static void paint_host_lights() {
+    // Colour and player lights only: no lightbar-setup (fade) bits, no audio section.
+    SetStateData state = {
+        .AllowLedColor = 1,
+        .LedRed = host_led_r,
+        .LedGreen = host_led_g,
+        .LedBlue = host_led_b,
+    };
+    if (host_player_set) {
+        state.AllowPlayerIndicators = 1;
+        state.PlayerLight1 = (host_player_bits >> 0) & 1;
+        state.PlayerLight2 = (host_player_bits >> 1) & 1;
+        state.PlayerLight3 = (host_player_bits >> 2) & 1;
+        state.PlayerLight4 = (host_player_bits >> 3) & 1;
+        state.PlayerLight5 = (host_player_bits >> 4) & 1;
+        state.PlayerLightFade = (host_player_bits >> 5) & 1;
+    }
+    send_state_0x31(state);
+}
+#endif
+
 // Retry work that could not be issued from an event handler. Called from the
 // main loop, where BTstack has finished processing whatever it was doing and
 // the command credit is actually available again -- retrying from inside the
@@ -515,48 +578,61 @@ static bool bt_try_create_connection() {
 // callbacks have run.
 void bt_task() {
 #if defined(PORT_PLATFORM_ESP32S31)
-    // Two steps, because one report cannot do both jobs. Carrying ResetLights
-    // and a colour together released the LEDs and left them dark: the controller
-    // takes the handover and does not apply a colour from the same report, which
-    // is why the lightbar blanked until the host next sent something. SDL pulses
-    // the bit alone, then paints, so do that.
     if (release_lights_at_ms != 0 && port::now_ms() >= release_lights_at_ms) {
+        release_lights_at_ms = 0;
         if (hid_interrupt_cid == 0) {
-            release_lights_at_ms = 0;
+            release_wait_input = false;
             release_lights_stage = 0;
         } else if (release_lights_stage == 0) {
-            // Step 1: hand the LEDs over. No colour -- AllowLedColor stays 0.
+            // Fade-in alone: no colour, and no ResetLights (it cannot cancel the pulse).
             SetStateData state = {
-                .AllowAudioControl = 1,
-                .ResetLights = 1,
-                .MicSelect = get_config().mic_select,
+                .AllowColorLightFadeAnimation = 1,
+                .LightFadeAnimation = LightFadeAnimation::FadeIn,
             };
-            update_state(state);
+            send_state_0x31(state);
+#if defined(DS5_FEATURE_TRACE)
+            printf("[%lu] [LED] handover 1/3: fade-in\n", (unsigned long) port::now_ms());
+#endif
             release_lights_stage = 1;
-            release_lights_at_ms = port::now_ms() + kReleaseLightsPaintMs;
-            if (release_lights_at_ms == 0) release_lights_at_ms = 1;
-        } else {
-            // Step 2: paint whatever the host last asked for. In the paths that
-            // already worked this repaints the value already showing, so it is
-            // invisible there.
+            release_lights_at_ms = port::now_ms(); // next main-loop pass
+        } else if (release_lights_stage == 1) {
+            // Fade-out with the host colour and player lights; the controller runs it
+            // once its fade-in completes.
             SetStateData state = {
-                .AllowAudioControl = 1,
                 .AllowLedColor = 1,
-                .MicSelect = get_config().mic_select,
-                .AllowLightBrightnessChange = 1,
                 .AllowColorLightFadeAnimation = 1,
                 .LightFadeAnimation = LightFadeAnimation::FadeOut,
-                .LightBrightness = LightBrightness::Bright,
                 .LedRed = host_led_r,
                 .LedGreen = host_led_g,
                 .LedBlue = host_led_b,
             };
-            update_state(state);
-            printf("[%lu] [LED] lights released, painted %02X%02X%02X\n",
-                   (unsigned long) port::now_ms(), host_led_r, host_led_g, host_led_b);
-            release_lights_at_ms = 0;
+            if (host_player_set) {
+                state.AllowPlayerIndicators = 1;
+                state.PlayerLight1 = (host_player_bits >> 0) & 1;
+                state.PlayerLight2 = (host_player_bits >> 1) & 1;
+                state.PlayerLight3 = (host_player_bits >> 2) & 1;
+                state.PlayerLight4 = (host_player_bits >> 3) & 1;
+                state.PlayerLight5 = (host_player_bits >> 4) & 1;
+                state.PlayerLightFade = (host_player_bits >> 5) & 1;
+            }
+            send_state_0x31(state);
+#if defined(DS5_FEATURE_TRACE)
+            printf("[%lu] [LED] handover 2/3: fade-out + %02X%02X%02X\n", (unsigned long) port::now_ms(),
+                   host_led_r, host_led_g, host_led_b);
+#endif
+            release_lights_stage = 2;
+            release_lights_at_ms = port::now_ms() + kRepaintAfterMs;
+        } else {
+            // Plain repaint, in case the host changed colour while the pad held the bar.
+            paint_host_lights();
+            lights_handed_over = true;
+            port::led_set_on_color(host_led_r, host_led_g, host_led_b);
+            printf("[%lu] [LED] lightbar handed over: %02X%02X%02X, player %s\n",
+                   (unsigned long) port::now_ms(), host_led_r, host_led_g, host_led_b,
+                   host_player_set ? "re-applied" : "not set by host");
             release_lights_stage = 0;
         }
+        if (release_lights_at_ms == 0 && release_lights_stage != 0) release_lights_at_ms = 1;
     }
 #endif
 #if BT_INQUIRY_BURSTS
@@ -996,7 +1072,10 @@ static void PORT_FAST_FUNC(hci_packet_handler)(uint8_t packet_type, uint16_t cha
             hid_interrupt_cid = 0;
 #if defined(PORT_PLATFORM_ESP32S31)
             release_lights_at_ms = 0;
+            release_wait_input = false;
             release_lights_stage = 0;
+            lights_handed_over = false;
+            port::led_reset_on_color(); // back to white for the inquiry blink
 #endif
             gpio_on_disconnect();
             wake_on_bt_disconnect();
@@ -1036,6 +1115,23 @@ static void PORT_FAST_FUNC(l2cap_packet_handler)(uint8_t packet_type, uint16_t c
         if (channel == hid_interrupt_cid) {
             // printf("[L2CAP] HID Interrupt data len=%u\n", size);
             // printf_hexdump(packet, size);
+#if defined(PORT_PLATFORM_ESP32S31)
+            if (release_wait_input && size >= 34 && packet[1] == 0x31) {
+                const uint32_t ts = packet[30] | packet[31] << 8 | packet[32] << 16 |
+                                    static_cast<uint32_t>(packet[33]) << 24;
+                if (ts >= kConnectAnimationDoneTs) {
+                    release_wait_input = false;
+                    if (release_lights_stage == 0 && release_lights_at_ms != 0) {
+                        release_lights_at_ms = port::now_ms();
+                        if (release_lights_at_ms == 0) release_lights_at_ms = 1;
+                    }
+#if defined(DS5_FEATURE_TRACE)
+                    printf("[%lu] [LED] first 0x31 input, sensor ts %lu: handover now\n",
+                           (unsigned long) port::now_ms(), (unsigned long) ts);
+#endif
+                }
+            }
+#endif
             bt_data_callback(INTERRUPT, packet, size);
 
             // 静默检测
@@ -1145,6 +1241,9 @@ static void PORT_FAST_FUNC(l2cap_packet_handler)(uint8_t packet_type, uint16_t c
 #endif
 
                     init_feature();
+#if !defined(PORT_PLATFORM_ESP32S31)
+                    // ESP32-S31 sends its lightbar setup from the handover in
+                    // bt_task() instead (see kHandoverFallbackMs).
                     SetStateData state = {
                         .AllowAudioControl = 1,
                         .AllowLedColor = 1,
@@ -1163,15 +1262,15 @@ static void PORT_FAST_FUNC(l2cap_packet_handler)(uint8_t packet_type, uint16_t c
 #if defined(DS5_FEATURE_TRACE)
                     feature_trace_state_sent();
 #endif
+#endif
 
 #if defined(PORT_PLATFORM_ESP32S31)
-                    // Steam never pulses ResetLights (verified: reset=0 on every
-                    // host report), and in wireless mode the DualSense holds its own
-                    // LEDs until that bit is pulsed -- so after a PS-hold power-cycle
-                    // the lightbar stays on the controller's connect blue and ignores
-                    // every colour the host asks for.
+                    // Lightbar handover (see kHandoverFallbackMs). Starts on the first
+                    // 0x31 input past SDL's timestamp gate, or after the fallback.
                     release_lights_stage = 0;
-                    release_lights_at_ms = port::now_ms() + kReleaseLightsDelayMs;
+                    lights_handed_over = false;
+                    release_wait_input = true;
+                    release_lights_at_ms = port::now_ms() + kHandoverFallbackMs;
                     if (release_lights_at_ms == 0) release_lights_at_ms = 1;
 #endif
 
@@ -1405,7 +1504,15 @@ void init_feature() {
 void update_state(const SetStateData &state) {
     uint8_t pkt[142]{};
     pkt[0] = 0x32;
+#if defined(PORT_PLATFORM_ESP32S31)
+    // Byte 1 carries the report sequence number, shared with every other
+    // output report on the link (audio_send_*, forward_output_report), so take
+    // the next one rather than a constant.
+    pkt[1] = reportSeqCounter << 4;
+    reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
+#else
     pkt[1] = 0x10;
+#endif
     pkt[2] = 0x90;
     pkt[3] = 0x3f;
     memcpy(pkt + 4, &state, sizeof(SetStateData));

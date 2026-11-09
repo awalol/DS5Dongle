@@ -273,6 +273,11 @@ static void forward_output_report(uint8_t const *data, uint16_t len) {
     if (state.AllowLedColor) {
         bt_note_host_led(state.LedRed, state.LedGreen, state.LedBlue);
     }
+    if (state.AllowPlayerIndicators) {
+        bt_note_host_player(static_cast<uint8_t>(
+            state.PlayerLight1 | state.PlayerLight2 << 1 | state.PlayerLight3 << 2 |
+            state.PlayerLight4 << 3 | state.PlayerLight5 << 4 | state.PlayerLightFade << 5));
+    }
 #if defined(DS5_FEATURE_TRACE)
     // Quiet by design: only report when the host actually asks for a
     // lightbar change, so rumble and trigger traffic does not drown
@@ -280,18 +285,29 @@ static void forward_output_report(uint8_t const *data, uint16_t len) {
     // at all after a reconnect, which splits "the host stopped
     // sending" from "the controller stopped listening".
     {
-        static uint8_t last_r = 0, last_g = 0, last_b = 0;
-        static bool seen = false;
-        if (state.AllowLedColor || state.ResetLights ||
-            !seen || state.LedRed != last_r || state.LedGreen != last_g ||
-            state.LedBlue != last_b) {
-            printf("[%lu] [LED] host report: allow=%u reset=%u rgb=%02X%02X%02X fade=%u bright=%u\n",
+        // One line per CHANGE in what the host asks of the LEDs, not per report.
+        const uint8_t player = static_cast<uint8_t>(
+            state.PlayerLight1 | state.PlayerLight2 << 1 | state.PlayerLight3 << 2 |
+            state.PlayerLight4 << 3 | state.PlayerLight5 << 4 | state.PlayerLightFade << 5);
+        const uint32_t key = static_cast<uint32_t>(state.AllowLedColor) |
+                             static_cast<uint32_t>(state.ResetLights) << 1 |
+                             static_cast<uint32_t>(state.AllowPlayerIndicators) << 2 |
+                             static_cast<uint32_t>(player) << 3;
+        const uint32_t rgb = static_cast<uint32_t>(state.LedRed) << 16 |
+                             static_cast<uint32_t>(state.LedGreen) << 8 | state.LedBlue;
+        static uint32_t last_key = 0xFFFFFFFFu, last_rgb = 0xFFFFFFFFu;
+        static uint32_t reports = 0;
+        reports++;
+        if (key != last_key || (state.AllowLedColor && rgb != last_rgb)) {
+            printf("[%lu] [LED] host: allow_led=%u reset=%u rgb=%06lX fade=%u bright=%u | allow_player=%u player=0x%02X | (%lu reports since last line)\n",
                    (unsigned long) port::now_ms(), (unsigned) state.AllowLedColor,
-                   (unsigned) state.ResetLights,
-                   state.LedRed, state.LedGreen, state.LedBlue,
-                   (unsigned) state.LightFadeAnimation, (unsigned) state.LightBrightness);
-            last_r = state.LedRed; last_g = state.LedGreen; last_b = state.LedBlue;
-            seen = true;
+                   (unsigned) state.ResetLights, (unsigned long) rgb,
+                   (unsigned) state.LightFadeAnimation, (unsigned) state.LightBrightness,
+                   (unsigned) state.AllowPlayerIndicators, (unsigned) player,
+                   (unsigned long) reports);
+            last_key = key;
+            if (state.AllowLedColor) last_rgb = rgb;
+            reports = 0;
         }
     }
 #endif
@@ -440,6 +456,9 @@ int main() {
 #endif
         port::bt_transport_poll();
         bt_task();
+#if defined(PORT_PLATFORM_ESP32S31)
+        usb_reconnect_task();
+#endif
         tud_task();
         wake_task();
         button_shortcut_task();

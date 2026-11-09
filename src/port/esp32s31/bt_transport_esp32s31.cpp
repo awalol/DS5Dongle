@@ -68,6 +68,13 @@ volatile bool g_tx_complete = false;
 
 // Incremented by the controller task, drained by the main task for reporting.
 volatile uint32_t g_rx_dropped = 0;
+// Of those, how many were HCI events, and the codes of the most recent ones.
+// An ACL drop costs one input report; an event drop can desynchronise BTstack
+// (a lost Number Of Completed Packets strands transmit credits), so the report
+// has to say which kind was lost.
+volatile uint32_t g_rx_dropped_events = 0;
+constexpr uint32_t kDroppedEventCodes = 8;
+volatile uint8_t g_rx_dropped_event_code[kDroppedEventCodes] = {};
 
 bool g_controller_started = false;
 
@@ -92,6 +99,10 @@ int vhci_recv_cb(uint8_t *data, uint16_t len) {
         // disconnects this transport exists to avoid. bt_transport_poll()
         // reports the delta from the main task instead.
         ++g_rx_dropped;
+        if (len >= 2 && data[0] == HCI_EVENT_PACKET) {
+            g_rx_dropped_event_code[g_rx_dropped_events % kDroppedEventCodes] = data[1];
+            ++g_rx_dropped_events;
+        }
         return 0;
     }
 
@@ -307,6 +318,19 @@ static void usb_iso_stats_tick() {
 #endif
 
 void bt_transport_poll() {
+#if defined(DS5_FEATURE_TRACE)
+    // The ring holds a bounded stall's worth of traffic; log any main-loop gap
+    // long enough to approach it, so a drop can be matched to what stalled.
+    {
+        static uint32_t last_us = 0;
+        const uint32_t now_us = port::now_us32();
+        if (last_us != 0 && now_us - last_us > 30000) {
+            printf("[%lu] [BT] main loop away %lu ms before this poll\n",
+                   (unsigned long) port::now_ms(), (unsigned long) ((now_us - last_us) / 1000));
+        }
+        last_us = now_us;
+    }
+#endif
     // Deliver anything the controller task queued. Copy out under the mutex,
     // then dispatch with it released -- the handler re-enters BTstack and can
     // end up sending, and holding the lock across that would invite deadlock.
@@ -340,12 +364,24 @@ void bt_transport_poll() {
     // Dropping an HCI packet desynchronises the stack, so it must be visible --
     // just from a context where blocking on the UART is acceptable.
     {
-        static uint32_t reported_drops = 0;
+        static uint32_t reported_drops = 0, reported_events = 0;
         const uint32_t drops = g_rx_dropped;
         if (drops != reported_drops) {
-            printf("[BT] HCI rx ring full, dropped %lu packet(s)\n",
-                   (unsigned long) (drops - reported_drops));
+            const uint32_t events = g_rx_dropped_events;
+            const uint32_t new_events = events - reported_events;
+            printf("[BT] HCI rx ring full, dropped %lu packet(s), %lu of them HCI events",
+                   (unsigned long) (drops - reported_drops), (unsigned long) new_events);
+            const uint32_t shown = new_events < kDroppedEventCodes ? new_events : kDroppedEventCodes;
+            if (shown != 0) {
+                printf(" (last codes:");
+                for (uint32_t i = events - shown; i != events; i++) {
+                    printf(" 0x%02X", g_rx_dropped_event_code[i % kDroppedEventCodes]);
+                }
+                printf(")");
+            }
+            printf("\n");
             reported_drops = drops;
+            reported_events = events;
         }
     }
 

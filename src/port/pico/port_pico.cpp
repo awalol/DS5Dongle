@@ -167,6 +167,8 @@ void gpio_write(uint32_t pin, bool level) { gpio_put(pin, level); }
 
 void led_init() { led_set(false); }
 void led_set(bool on) { cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on); }
+void led_set_on_color(uint8_t, uint8_t, uint8_t) {} // single-colour LED
+void led_reset_on_color() {}
 
 // ----------------------------------------------------------------- one-shot timer
 
