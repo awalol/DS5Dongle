@@ -30,11 +30,14 @@ CONFIG_RTC_CLK_SRC_EXT_CRYS=y
 
 # --- CPU / scheduling ------------------------------------------------------
 CONFIG_FREERTOS_UNICORE=n
-# 240 MHz deliberately, not by omission -- this part also offers 320, IDF's
-# default here. One DualSense does not need it, and the lower clock costs less
-# power and heat. Revisit for multi-controller work, but it perturbs the same
-# timing-sensitive paths as everything else here, so it needs a hardware pass.
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# 320 MHz, IDF's default for this part. Core 1 runs the audio worker -- Opus
+# decode of the controller mic and encode of the speaker, every 10 ms -- and
+# shares the core with the Bluetooth controller. At 240 MHz, with libopus
+# single-precision and its hot path in RAM (see components/libopus and
+# main/ds5_hot_iram.lf), Opus measured ~950 us decode + ~2450 us encode per
+# frame, about a third of the core; the higher clock is margin for the
+# controller's share and for bursts, not a fix for anything that fails at 240.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_320=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 # Core allocation. The audio worker gets core 1, mirroring the RP2350 build's

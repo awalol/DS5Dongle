@@ -78,6 +78,14 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     # application and the TinyUSB library cannot disagree about them.
 )
 
+# Per-second mic isochronous-IN counters from the patched dwc2 driver (sent,
+# incomplete, early, rearmed, abandoned). Off by default; enable with
+#   idf.py --preview -C ports/esp32s31 -DDS5_USB_ISO_STATS=ON build
+option(DS5_USB_ISO_STATS "Print USB isochronous-IN counters once a second" OFF)
+if(DS5_USB_ISO_STATS)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DS5_USB_ISO_STATS=1)
+endif()
+
 set_source_files_properties("${SRC_DIR}/ram_mem.c" PROPERTIES
     COMPILE_FLAGS "-fno-builtin")
 

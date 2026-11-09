@@ -1,14 +1,50 @@
---- a/src/portable/synopsys/dwc2/dcd_dwc2.c	2026-09-08 16:10:31.412486303 -0400
-+++ b/src/portable/synopsys/dwc2/dcd_dwc2.c	2026-09-08 19:34:34.839194647 -0400
-@@ -52,6 +52,7 @@
+--- a/src/portable/synopsys/dwc2/dcd_dwc2.c
++++ b/src/portable/synopsys/dwc2/dcd_dwc2.c
+@@ -52,13 +52,35 @@
    uint16_t total_len;
    uint16_t max_size;
    uint8_t interval;
 +  uint16_t iso_target_frame; // (micro)frame this ISO transfer was armed for
    uint8_t iso_retry; // ISO retry counter
++  uint8_t iso_in_parity; // ISO IN: frame parity the current transfer is armed for
++  uint8_t iso_in_locked; // ISO IN: a transfer has gone out, so iso_in_parity is the host's
  } xfer_ctl_t;
  
-@@ -398,11 +399,19 @@
+ // This variable is modified from ISR context, so it must be protected by critical section
+ static xfer_ctl_t xfer_status[DWC2_EP_MAX][2];
+ #define XFER_CTL_BASE(_ep, _dir) (&xfer_status[_ep][_dir])
+ 
++// Isochronous IN diagnostics. Written only from the USB ISR; the firmware reads
++// and prints them once a second when built with DS5_USB_ISO_STATS.
++//   [0] transfers that went out
++//   [1] incomplete-ISO-IN flags against an endpoint armed for that parity
++//   [2] ...of those, raised before the transfer's target (micro)frame
++//   [3] transfers re-armed for another try
++//   [4] transfers abandoned (XFER_RESULT_FAILED): their audio is lost
++volatile uint32_t dwc2_iso_in_stats[5];
++
++// Called on every IN transfer completion. An ISO IN transfer that went out was
++// armed with the parity the host polls in, so lock it for the next one.
++static void iso_in_note_complete(dwc2_regs_t* dwc2, uint8_t epnum) {
++  const dwc2_depctl_t depctl = {.value = dwc2->epin[epnum].diepctl};
++  if (depctl.type == DEPCTL_EPTYPE_ISOCHRONOUS) {
++    dwc2_iso_in_stats[0]++;
++    XFER_CTL_BASE(epnum, TUSB_DIR_IN)->iso_in_locked = 1;
++  }
++}
++
+ typedef struct {
+   // EP0 transfers are limited to 1 packet - larger sizes has to be split
+   uint16_t ep0_pending[2];  // Index determines direction as tusb_dir_t type
+@@ -279,6 +301,7 @@
+ 
+   xfer_ctl_t* xfer = XFER_CTL_BASE(epnum, dir);
+   xfer->max_size = tu_edpt_packet_size(p_endpoint_desc);
++  xfer->iso_in_locked = 0; // a reopened endpoint may be polled in a new phase
+ 
+   const dwc2_dsts_t dsts = {.value = dwc2->dsts};
+   if (dsts.enum_speed == DCFG_SPEED_HIGH) {
+@@ -398,11 +421,30 @@
    depctl.enable = 1;
    if (depctl.type == DEPCTL_EPTYPE_ISOCHRONOUS) {
      const dwc2_dsts_t dsts = {.value = dwc2->dsts};
@@ -25,14 +61,25 @@
 +    // already in frame_number units (see edpt_activate).
 +    const uint32_t target = dsts.frame_number + xfer->interval;
 +    xfer->iso_target_frame = (uint16_t) (target & 0x3FFFu);
-+    if (target & 1u) {
++    uint32_t odd = target & 1u;
++    // ISO IN with an even interval (high speed, bInterval >= 2): every poll
++    // lands on the same parity, so once a transfer has gone out, keep its
++    // parity rather than deriving one from the current microframe. The next
++    // transfer is armed from the class driver's task, which runs at an
++    // arbitrary point in the interval, so "now" is the wrong parity about half
++    // the time.
++    if (dir == TUSB_DIR_IN && (xfer->interval & 1u) == 0) {
++      if (xfer->iso_in_locked) odd = xfer->iso_in_parity;
++      xfer->iso_in_parity = (uint8_t) odd;
++    }
++    if (odd) {
        depctl.set_data1_iso_odd = 1;
 +    } else {
 +      depctl.set_data0_iso_even = 1;
      }
    }
  
-@@ -727,7 +736,17 @@
+@@ -727,7 +769,17 @@
  
    // Clear stall and reset data toggle
    dep->ctl &= ~EPCTL_STALL;;
@@ -51,7 +98,108 @@
  }
  
  //--------------------------------------------------------------------
-@@ -1176,9 +1195,45 @@
+@@ -989,6 +1041,7 @@
+       // EP0 can only handle one packet. Schedule another packet to be transmitted.
+       edpt_schedule_packets(rhport, epnum, TUSB_DIR_IN);
+     } else {
++      iso_in_note_complete(dwc2, epnum);
+       dcd_event_xfer_complete(rhport, epnum | TUSB_DIR_IN_MASK, xfer->total_len, XFER_RESULT_SUCCESS, true);
+     }
+   }
+@@ -1070,6 +1123,7 @@
+ }
+ 
+ static void handle_epin_dma(uint8_t rhport, uint8_t epnum, dwc2_diepint_t diepint_bm) {
++  dwc2_regs_t* dwc2 = DWC2_REG(rhport);
+   xfer_ctl_t* xfer = XFER_CTL_BASE(epnum, TUSB_DIR_IN);
+ 
+   if (diepint_bm.xfer_complete) {
+@@ -1078,6 +1132,7 @@
+       xfer->buffer += _dcd_data.ep0_xact_bytes[TUSB_DIR_IN];
+       edpt_schedule_packets(rhport, epnum, TUSB_DIR_IN);
+     } else {
++      iso_in_note_complete(dwc2, epnum);
+       dcd_event_xfer_complete(rhport, epnum | TUSB_DIR_IN_MASK, xfer->total_len, XFER_RESULT_SUCCESS, true);
+     }
+   }
+@@ -1126,6 +1181,53 @@
+   }
+ }
+ 
++// Incomplete-ISO-IN handling for an even interval (high speed, bInterval >= 2).
++//
++// The core raises the flag at the end of every microframe of the armed parity
++// in which no IN token came. With the host polling once per interval, that
++// includes the microframes between polls, which are not misses at all. The
++// upstream handler below treats each one as a miss and re-arms for the next
++// microframe, so it burns its retries on slots the host never polls and then
++// abandons the transfer -- continuous mic dropouts at high speed. Only a flag
++// at or after the transfer's target frame is a real miss, and a real miss means
++// the host polls in the other parity: switch to it, and give it one interval.
++static void iso_in_retry_even_interval(uint8_t rhport, uint8_t epnum, dwc2_dep_t* epin,
++                                       dwc2_depctl_t depctl, xfer_ctl_t* xfer) {
++  dwc2_regs_t* dwc2 = DWC2_REG(rhport);
++  const dwc2_dsts_t dsts = {.value = dwc2->dsts};
++  const uint16_t now = (uint16_t) (dsts.frame_number & 0x3FFFu);
++  const uint16_t past_target = (uint16_t) ((now - xfer->iso_target_frame) & 0x3FFFu);
++  if (past_target >= 0x2000u) {
++    dwc2_iso_in_stats[2]++; // before the target: the host has not polled yet
++    return;
++  }
++
++  xfer->iso_in_locked = 0;
++  if (xfer->iso_retry == 0) {
++    dwc2_iso_in_stats[4]++;
++    edpt_disable(rhport, epnum | TUSB_DIR_IN_MASK, false);
++    epin->diepctl |= DIEPCTL_USBAEP;
++    dcd_event_xfer_complete(rhport, epnum | TUSB_DIR_IN_MASK, 0, XFER_RESULT_FAILED, true);
++    return;
++  }
++  xfer->iso_retry--;
++  dwc2_iso_in_stats[3]++;
++
++  dwc2_ep_tsize_t deptsiz = {.value = 0};
++  deptsiz.xfer_size = xfer->total_len;
++  deptsiz.packet_count = tu_div_ceil(xfer->total_len, xfer->max_size);
++  epin->tsiz = deptsiz.value;
++
++  xfer->iso_in_parity ^= 1u;
++  xfer->iso_target_frame = (uint16_t) ((now + xfer->interval) & 0x3FFFu);
++  if (xfer->iso_in_parity) {
++    depctl.set_data1_iso_odd = 1;
++  } else {
++    depctl.set_data0_iso_even = 1;
++  }
++  epin->diepctl = depctl.value;
++}
++
+ static void handle_incomplete_iso_in(uint8_t rhport) {
+   dwc2_regs_t      *dwc2    = DWC2_REG(rhport);
+   const dwc2_dsts_t dsts    = {.value = dwc2->dsts};
+@@ -1140,8 +1242,14 @@
+     // DSTS.SOFFN is the targeted uframe number for this EP, then this EP has an incomplete transfer.
+     if (depctl.enable && depctl.type == DEPCTL_EPTYPE_ISOCHRONOUS && depctl.dpid_iso_odd == odd_now) {
+       xfer_ctl_t *xfer = XFER_CTL_BASE(epnum, TUSB_DIR_IN);
++      dwc2_iso_in_stats[1]++;
++      if ((xfer->interval & 1u) == 0) {
++        iso_in_retry_even_interval(rhport, epnum, epin, depctl, xfer);
++        continue;
++      }
+       if (xfer->iso_retry > 0) {
+         xfer->iso_retry--;
++        dwc2_iso_in_stats[3]++;
+         // Restart ISO transfe: re-write TSIZ and CTL
+         dwc2_ep_tsize_t deptsiz = {.value = 0};
+         deptsiz.xfer_size       = xfer->total_len;
+@@ -1156,6 +1264,7 @@
+         epin->diepctl = depctl.value;
+       } else {
+         // too many retries, give up, but keep endpoint activated
++        dwc2_iso_in_stats[4]++;
+         edpt_disable(rhport, epnum | TUSB_DIR_IN_MASK, false);
+         epin->diepctl |= DIEPCTL_USBAEP;
+         dcd_event_xfer_complete(rhport, epnum | TUSB_DIR_IN_MASK, 0, XFER_RESULT_FAILED, true);
+@@ -1176,9 +1285,45 @@
    Note: when OTG_MULTI_PROC_INTRPT = 1, Device Each endpoint interrupt deachint/deachmsk/diepeachmsk/doepeachmsk
    are combined to generate dedicated interrupt line for each endpoint.
   */
@@ -97,8 +245,8 @@
    const uint32_t gintsts = dwc2->gintsts & gintmask;
  
    if (gintsts & GINTSTS_USBRST) {
---- a/src/portable/synopsys/dwc2/dwc2_esp32.h	2026-09-08 18:54:43.739446742 -0400
-+++ b/src/portable/synopsys/dwc2/dwc2_esp32.h	2026-09-08 18:54:43.779446738 -0400
+--- a/src/portable/synopsys/dwc2/dwc2_esp32.h
++++ b/src/portable/synopsys/dwc2/dwc2_esp32.h
 @@ -117,7 +117,11 @@
  
  TU_ATTR_ALWAYS_INLINE static inline void dwc2_int_set(uint8_t rhport, tusb_role_t role, bool enabled) {

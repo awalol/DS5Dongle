@@ -53,3 +53,39 @@ entries:
     hid_device:tud_hid_n_report (noflash_text)
     hid_device:tud_hid_n_ready (noflash_text)
     hid_device:hidd_xfer_cb (noflash_text)
+
+# The CELT codec both audio streams run every 10 ms frame (mic decode, speaker
+# encode), on core 1. Whole objects, so their constant tables (modes: window,
+# band edges, FFT twiddles; cwrs: pulse tables) come along -- a table in flash
+# costs a cache miss just as code does. SILK, the tonality analysis and the
+# repacketizer never run in this firmware and stay in flash. The Pico relocates
+# all of libopus; the S31 has too little internal RAM left for that (~230 KB
+# linked), so only this ~87 KB set moves.
+[mapping:ds5_opus_hot]
+archive: libopus.a
+entries:
+    celt_encoder (noflash)
+    celt_decoder (noflash)
+    celt (noflash)
+    bands (noflash)
+    quant_bands (noflash)
+    vq (noflash)
+    cwrs (noflash)
+    rate (noflash)
+    pitch (noflash)
+    celt_lpc (noflash)
+    kiss_fft (noflash)
+    mdct (noflash)
+    mathops (noflash)
+    entcode (noflash)
+    entenc (noflash)
+    entdec (noflash)
+    laplace (noflash)
+    modes (noflash)
+
+# The resampler's per-frame path (speaker 51.2 -> 48 kHz on core 1, haptics on
+# core 0): the RP2350 build's Phase A.2 counterpart.
+[mapping:ds5_wdl_hot]
+archive: libwdl_resampler.a
+entries:
+    resample (noflash)

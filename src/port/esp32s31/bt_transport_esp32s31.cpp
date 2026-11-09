@@ -278,6 +278,34 @@ static void emit_packet_sent_if_pending() {
     g_packet_handler(HCI_EVENT_PACKET, event, sizeof(event));
 }
 
+#if defined(DS5_USB_ISO_STATS)
+// Isochronous IN (mic) counters kept by the patched TinyUSB dwc2 driver; see
+// ports/esp32s31/patches/tinyusb-dwc2-esp32s31.patch for what each one counts.
+// One line a second, and only while something changed, so an idle console stays
+// quiet. A healthy mic stream reads sent=1000 with abandoned=0.
+extern "C" volatile uint32_t dwc2_iso_in_stats[5];
+
+static void usb_iso_stats_tick() {
+    static uint32_t last_ms = 0;
+    static uint32_t last[5] = {};
+    const uint32_t now = port::now_ms();
+    if (now - last_ms < 1000) return;
+    last_ms = now;
+    uint32_t cur[5];
+    bool changed = false;
+    for (int i = 0; i < 5; i++) {
+        cur[i] = dwc2_iso_in_stats[i];
+        changed |= cur[i] != last[i];
+    }
+    if (!changed) return;
+    printf("[USB] mic iso IN /s: sent=%lu incomplete=%lu early=%lu rearmed=%lu abandoned=%lu\n",
+           (unsigned long) (cur[0] - last[0]), (unsigned long) (cur[1] - last[1]),
+           (unsigned long) (cur[2] - last[2]), (unsigned long) (cur[3] - last[3]),
+           (unsigned long) (cur[4] - last[4]));
+    for (int i = 0; i < 5; i++) last[i] = cur[i];
+}
+#endif
+
 void bt_transport_poll() {
     // Deliver anything the controller task queued. Copy out under the mutex,
     // then dispatch with it released -- the handler re-enters BTstack and can
@@ -327,6 +355,12 @@ void bt_transport_poll() {
     // Timers and data sources. This is the cooperative equivalent of BTstack's
     // execute(); it returns immediately rather than owning the task.
     btstack_run_loop_embedded_execute_once();
+
+#if defined(DS5_USB_ISO_STATS)
+    // Not Bluetooth: this is the one ESP32-only hook the main loop calls every
+    // iteration, so the USB counters ride along.
+    usb_iso_stats_tick();
+#endif
 }
 
 } // namespace port
