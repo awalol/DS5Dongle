@@ -6,11 +6,17 @@ dongle-style breakout with the S31's high-speed USB on a Type-C port. The
 [Also runs on](#also-runs-on-esp32-s31-function-coreboard-1) -- and is where the
 port was developed.
 
-Verified on hardware, on the Function-CoreBoard-1: pairing, reconnect after both
-a PS-hold power-cycle and a dongle replug, USB enumeration of the emulated
-controller, speaker and microphone audio under sustained load, and the lightbar
-handover after a power-cycle. The Alef carries the same module wired to the same
-pins, so nothing in the firmware differs between the two; only the cabling does.
+Verified on hardware on the Alef: pairing, reconnect after a PS-hold and after a
+power-off, USB enumeration at high speed, speaker and microphone audio (recordings
+checked, speaker and microphone together), rumble, input, the lightbar handover on
+a fresh pair, a PS-hold reconnect and a power-off, and the board LED following
+the controller's colour. Earlier, on the Function-CoreBoard-1: pairing, reconnect
+after both a PS-hold power-cycle and a dongle replug, and speaker audio under
+sustained load. The CoreBoard-1's microphone result was taken at full speed,
+before this target moved to high speed, and does not carry over: the high-speed
+microphone needed the isochronous IN fix described under "High speed". The Alef
+carries the same module wired to the same pins, so nothing in the firmware
+differs between the two; only the cabling does.
 
 The Pico2W / Waveshare RP2350B builds are unaffected; they still build from the
 top-level `CMakeLists.txt` and were verified unchanged by this work.
@@ -161,7 +167,9 @@ Working:
   is effectively free.
 - Config storage on `esp_partition` with a RAM shadow (IDF cannot erase a
   mapped partition, so the RP2350's XIP-pointer trick does not carry over),
-  `esp_timer` one-shots, GPIO61 boot button, RMT-driven WS2812 status LED, task
+  `esp_timer` one-shots, GPIO61 boot button, RMT-driven RGB status LED (WS2812 on the
+  CoreBoard-1, SK6805 on the Alef) that shows the controller's lightbar colour once
+  connected (`port::led_set_on_color()`), task
   watchdog, USB PHY bring-up, core-1 audio worker as a pinned static task.
 - BTstack built from `lib/btstack` (pinned to the same commit the Pico SDK
   uses) with the on-die controller in BR/EDR-only, controller-only mode.
@@ -200,14 +208,24 @@ Each of these silently does the wrong thing rather than failing loudly:
   here; `CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY` is what sets `BT_CTRL_BREDR_ENABLE`.
 - TinyUSB calls back into `main` for descriptors with nothing pointing that way
   in the dependency graph, so `main` needs `WHOLE_ARCHIVE`.
-- **The DualSense keeps its own lightbar in wireless mode** until the host
-  pulses `ResetLights` (`src/utils.h` bit 1.3), and Steam never sends that bit --
-  verified, `reset=0` on every host output report. A fresh pair releases the LEDs
-  anyway; a PS-hold power-cycle does not, so the lightbar sticks on the
-  controller's connect blue and ignores every colour the host asks for.
-  `bt_task()` pulses the bit alone 3s after the HID interrupt channel opens, then
-  repaints the host's last colour 120ms later. Two reports, because the
-  controller takes the handover and ignores a colour carried in the same one.
+- **A DualSense that reconnects without rebooting keeps its own lightbar.** After
+  a PS-hold that follows a fresh pairing, or when the dongle resets under a running
+  controller, the controller keeps its blue connect pulse and flashing player LEDs
+  and ignores every colour the host sends -- including after a `ResetLights` pulse
+  (`src/utils.h` bit 1.3), which is what SDL sends. Rumble, audio and input all
+  work, so only the lights show it. DS4Windows (`DualSenseDevice.cs`) documents
+  the mechanism: a lightbar fade-out is "scheduled after fade-in completion", and
+  "only a fade-out can cancel the pulse". So on every link `bt_task()` sends a
+  fade-in on its own, then on the next loop pass a fade-out carrying the host's
+  last colour and player lights, then a plain repaint 150 ms later. It starts on
+  the first full (0x31) input report once its sensor timestamp passes SDL's
+  10200000 connect-animation gate, or 3 s after the channel opens. Verified on a
+  fresh pair, a PS-hold reconnect (stuck on every earlier attempt) and a
+  power-off; waits of 3 s, 1 s and none between the two reports all worked, because
+  the controller queues the fade-out itself. Never send the fade-in without the
+  fade-out: a fade-in followed by anything else locks the bar on blue. Not applied
+  on RP2350, which was never tested with a reconnect that skips the reboot; if it
+  shows the same stuck lightbar, this sequence is the fix.
 
 ### High speed
 
@@ -243,6 +261,35 @@ why partial attempts looked like dead ends:
   the isochronous endpoint for milliseconds at a time -- about 4% of packets
   lost, heard as static. It leaves the main loop untouched, so loop-level
   instrumentation cannot see it. `CONFIG_BT_CTRL_PINNED_TO_CORE=1`.
+
+The microphone needed one more, on its own. **Isochronous IN parity at high
+speed:** dwc2 raises an incomplete-ISO-IN interrupt for each matching-parity
+microframe the host did not poll -- several times between polls at `bInterval` 4
+-- and the stock driver treated every one as a miss, flipping the parity and
+eventually abandoning the transfer. Measured with the patch's counters: 745
+packets/s sent and 85/s abandoned, heard as garble. The patch records each
+transfer's target (micro)frame, ignores flags raised before it, flips the parity
+only on a real miss, and locks it once a transfer completes: 1000 packets/s, clean
+recordings. Build with `-DDS5_USB_ISO_STATS=ON` to print the counters once a
+second (`main/CMakeLists.txt`).
+
+### CPU budget
+
+Core 1 runs the audio worker: Opus encode for the speaker, Opus decode for the
+microphone. The S31's FPU is single-precision only, while CELT's float paths
+(`celt_sqrt`, `celt_exp` and the rest of `mathops.h`) call double-precision libm,
+which this core runs in software. `components/libopus/CMakeLists.txt`
+force-includes `opus_single_precision.h`, which maps `sqrt`, `cos`, `exp` and the
+others to their float versions, and adds `-fsingle-precision-constant`. Both apply
+to the CELT sources and `opus{,_encoder,_decoder}.c` only. It also turns on
+upstream's `OPUS_FLOAT_APPROX`. The CELT hot functions and the WDL resampler run
+from RAM via `main/ds5_hot_iram.lf`. The clock is IDF's 320 MHz default for this
+part (`sdkconfig.defaults`).
+
+Measured: a 10 ms decode went from about 2.7 ms to under 1 ms. At 320 MHz the
+boot bench (100 runs, 71-byte packet) reports decode 718 us average and encode
+1362 us. A live stream encodes at about 1.6-1.7 ms per frame, roughly a quarter
+of core 1.
 
 Full speed is possible here but is not what ships, and is recorded because the
 obvious way to ask for it bricks the bus. `DCFG.DevSpd = DCFG_DSPD_FS_HSPHY`
@@ -293,10 +340,14 @@ does preempt -- and the core-1 audio worker is a real task on a real second
 core.
 
 Core allocation follows from the same reasoning. The audio worker's loop never
-blocks, because on RP2350 it owns a bare core. Core 1 is therefore dedicated to
-it, and the BT controller, `esp_timer` and main task are pinned to core 0
-explicitly in `sdkconfig.defaults` rather than left to defaults -- a default
-flipping to core 1 would surface as audio glitching under load.
+blocks, because on RP2350 it owns a bare core. Core 1 is therefore given to it,
+and `esp_timer` and the main task are pinned to core 0 explicitly in
+`sdkconfig.defaults` rather than left to defaults -- a default flipping to core 1
+would surface as audio glitching under load. The one exception is the BT
+controller, pinned to core 1 (`CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE_1`): on core 0
+its interrupt-disabling critical sections stalled the USB isochronous endpoint
+(see "High speed"), and the worker's Opus load leaves it room on core 1 (see
+"CPU budget").
 
 ### Deliberately accepted, with tripwires
 
@@ -318,10 +369,17 @@ make it unsafe -- check these before changing the relevant area.
   **Tripwire:** any task pinned to core 1 below priority 23 will silently never
   run.
 - **The HCI RX ring drops rather than applying back-pressure** (no
-  `ENABLE_HCI_CONTROLLER_TO_HOST_FLOW_CONTROL`). The ring holds roughly 350 ms
-  of traffic against a worst-case main-task stall of 150 ms, so ~2.3x margin.
-  Note `kAclPacketNum = 8` is worst-case *byte* sizing, not a slot count.
-  Drops are counted and reported from `bt_transport_poll()`.
+  `ENABLE_HCI_CONTROLLER_TO_HOST_FLOW_CONTROL`). An earlier estimate here, that
+  the ring held about 350 ms of traffic, was wrong. It overflowed on every connect
+  while `usb_reconnect()` slept 150 ms inside the Bluetooth handler: the main loop
+  was away about 250 ms and about 50 inbound ACL packets were dropped (no HCI
+  events). `usb_reconnect()` now finishes from the main loop on this target (see
+  the latent-defect entry below). The measured connect stall is 90-125 ms and
+  nothing drops. Note `kAclPacketNum = 8` is worst-case *byte* sizing, not a slot
+  count. Drops are counted, split into HCI events and ACL, and reported from
+  `bt_transport_poll()`.
+  **Tripwire:** anything that blocks the main loop for longer, especially from
+  a Bluetooth callback, will start dropping packets again.
 - **The hot path runs from RAM, at the cost of DIRAM that is shared with the
   heap.** `PORT_FAST_FUNC` maps to `IRAM_ATTR` and covers firmware code
   (`audio_loop`, `speaker_proc`, `mic_proc`, `interrupt_loop`, both packet
@@ -331,7 +389,10 @@ make it unsafe -- check these before changing the relevant area.
   btstack's `packet_handler`, `hci_run`, `l2cap_acl_handler`, `l2cap_run`, the
   send paths and list iterators, plus TinyUSB's `tud_task_ext`, `tu_fifo_*`,
   `dcd_edpt_xfer`, `audiod_xfer_isr` and the HID report tail all sit in DIRAM
-  (0x2F000000-0x2F080000). Cost 24.5 KB, leaving 277 KB / 55% of DIRAM free.
+  (0x2F000000-0x2F080000). The fragment also maps the Opus CELT hot functions and
+  the WDL resampler (see "CPU budget"). With all of it in place, `idf.py size`
+  reports DIRAM 69% used, 154 KB free. In a live audio stream the internal heap
+  measured 89 KB free, 57 KB at its low point.
   **Tripwire:** DIRAM is shared with the heap, so every function added to that
   fragment comes out of the allocator. It is scoped to the audio/BT per-packet
   path on purpose; `state_update` and the rest of the host->controller rumble/LED
@@ -406,6 +467,15 @@ fresh PS+Share pair, PS-button reconnect, USB enumeration, speaker, mic.
   "Connected DS5 Controller" branch, the only caller of `tud_connect()`, so the
   gamepad paired and the USB device never appeared. If this is fixed for both,
   fix it by checking the status and retrying, not by deferring the send.
+- **`update_state()` sends a constant sequence number** (`pkt[1] = 0x10`), while
+  every other output report takes the link's 4-bit counter. On ESP32-S31 it takes
+  the next counter value too. This caused no visible fault on either target; it is
+  recorded because a constant is wrong whenever audio reports are flowing.
+- **`usb_reconnect()` blocks for 150 ms**, and runs from the L2CAP handler on the
+  0x20 feature reply. On ESP32-S31 that stalled the Bluetooth pump long enough to
+  overflow the VHCI ring on every connect. There it now disconnects and returns,
+  and `usb_reconnect_task()` in the main loop reconnects 150 ms later. The
+  CYW43439 holds traffic back instead of dropping it, so the Pico keeps the delay.
 
 ### Investigated and reverted
 
@@ -420,9 +490,9 @@ fresh PS+Share pair, PS-button reconnect, USB enumeration, speaker, mic.
   **The lightbar conclusion drawn from the same test was wrong.** That build
   also had `DS5_FEATURE_TRACE=1`, whose blocking `printf`s sit on the output
   report path, so the lightbar working was not attributable to the inquiry scan
-  change it was meant to test. With the trace off the symptom returned and the
-  `ResetLights` pulse had to be restored. See the lightbar entry above -- it is a
-  real platform behaviour, not a bug of our own making.
+  change it was meant to test. With the trace off the symptom returned. See the
+  lightbar entry above: it is the controller's own behaviour, and `ResetLights`
+  turned out not to be the fix at all.
 
   Three lessons, all paid for in hardware test cycles:
 
@@ -434,6 +504,15 @@ fresh PS+Share pair, PS-button reconnect, USB enumeration, speaker, mic.
     shipped.
   - Verify the shipping configuration, not a near neighbour of it. Confirming
     with tracing on and then shipping with it off is not a verification.
+
+- **Lightbar theories ruled out on hardware** before the fade-out finding. Each
+  was in a build tested against the stuck reconnect, and none changed it:
+  `ResetLights` content and timing (SDL's exact bytes and gate), holding audio
+  reports back until the lights were released, report 0x31 against 0x32, brightness
+  or "none" lightbar-setup bits, the sequence number, and the dropped HCI packets.
+  In this condition the controller's own input reports look the same as on a link
+  that paints, and its sensor timestamp carries on from the previous link instead
+  of restarting.
 
 ### Not done
 
