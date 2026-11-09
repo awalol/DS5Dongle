@@ -120,6 +120,18 @@ idf.py --preview -C ports/esp32s31 build
 
 `--preview` is required: esp32s31 is still a preview target in ESP-IDF.
 
+CI publishes `ds5-bridge-esp32s31-alef-merged.bin`: the bootloader, partition
+table and app in one image, flashed at offset 0 over the `UART` port. It is
+named for the Alef, and the same image runs on the CoreBoard-1:
+
+```sh
+esptool --chip esp32s31 -b 460800 --no-stub write-flash --flash-mode dio \
+  --flash-freq 80m --flash-size 16MB 0x0 ds5-bridge-esp32s31-alef-merged.bin
+```
+
+Every Alef test in this README was flashed with this command, `--no-stub`
+included.
+
 Needs ESP-IDF **master** (verified against v6.2.0, commit 08e0d30a) — esp32s31
 is not in a tagged release. Note that `install.sh` pulls openocd, which needs a
 system `libusb-1.0`; openocd is only for JTAG debugging and the build works

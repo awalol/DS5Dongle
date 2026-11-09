@@ -375,19 +375,20 @@ jobs:
           # The target itself comes from ports/esp32s31/sdkconfig.defaults.
           idf.py --preview -C ports/esp32s31 "${VERSION_ARG[@]}" build
 
-          # Single image at offset 0, so flashing needs no per-file offsets.
+          # Single image at offset 0, so flashing needs no per-file offsets. Named
+          # for the target board, the Alef; the same image runs on the CoreBoard-1.
           idf.py --preview -C ports/esp32s31 merge-bin \
-            -o ds5-bridge-esp32s31-merged.bin
+            -o ds5-bridge-esp32s31-alef-merged.bin
 
           mkdir -p artifacts
-          cp ports/esp32s31/build/ds5-bridge-esp32s31-merged.bin \
-             "artifacts/ds5-bridge-esp32s31-merged${ASSET_SUFFIX}.bin"
+          cp ports/esp32s31/build/ds5-bridge-esp32s31-alef-merged.bin \
+             "artifacts/ds5-bridge-esp32s31-alef-merged${ASSET_SUFFIX}.bin"
 
       - name: Upload ESP32-S31 artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ds5-bridge-esp32s31-merged${{ steps.firmware-meta.outputs.asset_suffix }}
-          path: artifacts/ds5-bridge-esp32s31-merged${{ steps.firmware-meta.outputs.asset_suffix }}.bin
+          name: ds5-bridge-esp32s31-alef-merged${{ steps.firmware-meta.outputs.asset_suffix }}
+          path: artifacts/ds5-bridge-esp32s31-alef-merged${{ steps.firmware-meta.outputs.asset_suffix }}.bin
           archive: false
           if-no-files-found: error
 
