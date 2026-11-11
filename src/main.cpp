@@ -265,7 +265,7 @@ static void forward_output_report(uint8_t const *data, uint16_t len) {
     if (state.AllowAudioControl) {
         state.NoiseCancelEnable = 1;
     }
-    if (config.lock_volume) {
+    if (config.lock_volume == 1) {
         state.AllowHeadphoneVolume = 0;
         state.AllowMicVolume = 0;
         state.AllowSpeakerVolume = 0;

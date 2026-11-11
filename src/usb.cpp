@@ -2,8 +2,6 @@
 // Created by awalol on 2026/3/4.
 //
 
-#include <algorithm>
-
 #include "bt.h"
 #include "tusb.h"
 #include "bsp/board_api.h"
@@ -78,6 +76,12 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
                         // Only 1st form is supported
                         TU_VERIFY(p_request->wLength == 1);
 
+                        // Acknowledge host controls while locked, but preserve both
+                        // the reported USB state and the controller's mute state.
+                        if (get_config().lock_volume == 2) {
+                            return true;
+                        }
+
                         mute[index] = pBuff[0];
 
                         SetStateData state = {
@@ -101,6 +105,12 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
                     case AUDIO10_CS_REQ_SET_CUR:
                         // Only 1st form is supported
                         TU_VERIFY(p_request->wLength == 2);
+
+                        // Windows device volume uses UAC SET_CUR rather than the
+                        // HID output report filtered in forward_output_report().
+                        if (get_config().lock_volume == 2) {
+                            return true;
+                        }
 
                         volume[index] = static_cast<float>(*reinterpret_cast<int16_t const *>(pBuff)) / 256;
                         if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
@@ -156,9 +166,8 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
                 switch (p_request->bRequest) {
                     case AUDIO10_CS_REQ_GET_CUR:
                         TU_LOG2("    Get Volume of entity: %u\r\n", entityID); {
-                            if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
-                                volume[index] = -100.0f + std::min(static_cast<int>(get_config().speaker_volume),100);
-                            }
+                            // Report the last accepted value, including while
+                            // locked; a read must not change the held volume.
                             int16_t vol = volume[index] * 256; // convert to 1/256 dB units
                             return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &vol, sizeof(vol));
                         }

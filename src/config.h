@@ -34,7 +34,7 @@ struct __attribute__((packed)) Config_body {
     uint8_t speaker_select; // 0: auto, 1: builtin, 2: headphone, 3: disable
     uint8_t enable_wake; // bool: 0 disabled (default), 1 wake host on PS press (USB remote wakeup)
     uint8_t trigger_reduce; // [0,10] (0: auto)
-    uint8_t lock_volume; // bool
+    uint8_t lock_volume; // 0: off, 1: game/software (HID), 2: system volume (UAC)
     uint8_t status_gpio_pin; // board-usable GPIO, 0xff: disabled
     uint8_t status_gpio_mode; // 0: high while connected, 1: button pulse on connect
     uint8_t packet_mode; // 0: double packet(default), 1: single packet

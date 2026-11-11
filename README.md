@@ -87,6 +87,21 @@ You can modify the Pico settings via the web config.
 - For release: https://ds5.awalol.eu.org
 - For development: https://ds5-dev.awalol.eu.org
 
+The **Ignore volume changes** setting (`lock_volume`) has three modes:
+
+- `0`: Off.
+- `1`: Game/software — ignore volume and mute changes in HID output reports.
+  System USB Audio controls remain available.
+- `2`: UAC (system volume) — ignore volume and mute changes through USB Audio,
+  including Windows device volume. Game/software HID controls remain available.
+
+Both ignore modes cover the speaker, headphones and microphone. Set the desired
+device volume and mute state before ignoring UAC changes. USB Audio reads return
+the last accepted USB Audio values. The Windows slider may still move because
+the host can cache its requested value. Ignoring UAC changes cannot prevent a game or the
+Windows per-application mixer from attenuating audio samples before they reach
+the dongle.
+
 ## Community Fork
 
 ### Audio Auto Haptics fork [loteran/DS5Dongle](https://github.com/loteran/DS5Dongle)

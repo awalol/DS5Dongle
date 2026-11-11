@@ -132,7 +132,7 @@ void config_valid() {
         body->trigger_reduce = 0;
         printf("[Config] trigger_reduce is invalid\n");
     }
-    if (body->lock_volume > 1) {
+    if (body->lock_volume > 2) {
         body->lock_volume = 0;
         printf("[Config] lock_volume is invalid\n");
     }
