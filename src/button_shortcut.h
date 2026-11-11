@@ -13,7 +13,10 @@ constexpr uint8_t SHORTCUT_TRIGGER_DOUBLE_TAP = 0xFE;
 // the double tap here instead.
 constexpr uint8_t SHORTCUT_FLAG_DOUBLE_TAP = 0x01;
 constexpr uint8_t SHORTCUT_FLAG_HOLD = 0x02; // Keyboard follows physical state; TAP means one button.
-constexpr uint8_t SHORTCUT_FLAG_MASK = SHORTCUT_FLAG_DOUBLE_TAP | SHORTCUT_FLAG_HOLD;
+// Both buttons activate; A then holds modifiers while B controls the regular key.
+constexpr uint8_t SHORTCUT_FLAG_MODIFIER_HOLD = 0x04;
+constexpr uint8_t SHORTCUT_FLAG_MASK =
+    SHORTCUT_FLAG_DOUBLE_TAP | SHORTCUT_FLAG_HOLD | SHORTCUT_FLAG_MODIFIER_HOLD;
 constexpr uint32_t SHORTCUT_TAP_WINDOW_MS = 250;
 // The config UI pauses shortcut output for this long after it starts learning a
 // controller trigger, so the button being captured does not also fire its action.

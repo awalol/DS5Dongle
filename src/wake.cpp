@@ -126,6 +126,7 @@ void wake_note_usb_reconnect(void) {
 }
 
 extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
+    button_shortcut_reset(); // Never carry a latched modifier across USB suspend.
     WAKE_DBG("tud_suspend_cb remote_wakeup_en=%d prev_state=%s",
              (int)remote_wakeup_en, wake_state_name(state));
     // A deliberate Reconnect USB (FUNC_RECONNECT) tears the bus down and back up, which looks
