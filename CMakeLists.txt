@@ -138,7 +138,7 @@ endif ()
 
 # Cockos WDLResampler
 add_library(wdl_resampler STATIC
-        lib/WDL/WDL/resample.cpp
+        src/wdl_resample.cpp
 )
 target_include_directories(wdl_resampler PUBLIC
         lib/WDL/WDL
