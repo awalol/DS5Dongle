@@ -12,6 +12,7 @@ enum : uint8_t {
     PICO_CMD_UPDATE_CONFIG = 0x01,
     PICO_CMD_SAVE_TO_FLASH = 0x02,
     PICO_CMD_RECONNECT_USB = 0x03,
+    PICO_CMD_REBOOT_BOOTSEL = 0x04, // reboot into the ROM USB bootloader
     PICO_CMD_SHORTCUT_LEARNING = 0x05, // buffer[1] != 0 starts the 5s learning window
 };
 
