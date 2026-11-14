@@ -537,7 +537,7 @@ void __not_in_flash_func(core1_entry)() {
     opus_encoder_ctl(encoder,OPUS_SET_BITRATE(200 * 8 * 100));
     opus_encoder_ctl(encoder,OPUS_SET_VBR(false));
     opus_encoder_ctl(encoder,OPUS_SET_COMPLEXITY(0)); // max 4
-    resampler_audio.SetMode(true, 0, false);
+    resampler_audio.SetMode(false, 0, true, 12, 15);
     resampler_audio.SetRates(51200, 48000);
     resampler_audio.SetFeedMode(true);
     resampler_audio.Prealloc(2, 512, 480);
