@@ -12,6 +12,7 @@
 #include "button_shortcut.h"
 #include "config.h"
 #include "device/usbd.h"
+#include "pico/bootrom.h"
 #include "pico/time.h"
 #include "audio.h"
 #include "usb.h"
@@ -90,6 +91,11 @@ uint16_t pico_cmd_get(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
 void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
     if (bufsize == 0) {
         return;
+    }
+
+    if (report_id == 0xf6 && buffer[0] == PICO_CMD_REBOOT_BOOTSEL) {
+        printf("[CMD] Reboot to BOOTSEL\n");
+        reset_usb_boot(0, 0); // noreturn
     }
 
     if (report_id == 0xfa) {
