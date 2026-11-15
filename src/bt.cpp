@@ -1265,6 +1265,19 @@ static void PORT_FAST_FUNC(l2cap_packet_handler)(uint8_t packet_type, uint16_t c
 #endif
 
 #if defined(PORT_PLATFORM_ESP32S31)
+                    // The audio section of the state the RP2350 sends above. The
+                    // handover reports carry lights only, so without this nothing on
+                    // this link sets NoiseCancelEnable, and the speaker is attenuated
+                    // (#263) until a host report happens to carry AudioControl.
+                    {
+                        SetStateData audio = {
+                            .AllowAudioControl = 1,
+                            .MicSelect = get_config().mic_select,
+                            .NoiseCancelEnable = 1,
+                        };
+                        update_state(audio);
+                    }
+
                     // Lightbar handover (see kHandoverFallbackMs). Starts on the first
                     // 0x31 input past SDL's timestamp gate, or after the fallback.
                     release_lights_stage = 0;
