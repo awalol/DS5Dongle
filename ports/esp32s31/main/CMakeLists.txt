@@ -15,6 +15,7 @@ idf_component_register(
         "${SRC_DIR}/main.cpp"
         "${SRC_DIR}/usb.cpp"
         "${SRC_DIR}/audio.cpp"
+        "${SRC_DIR}/speaker_resample.cpp"
         "${SRC_DIR}/elastic.cpp"
         "${SRC_DIR}/bt.cpp"
         "${SRC_DIR}/button_functions.cpp"

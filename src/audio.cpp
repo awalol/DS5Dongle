@@ -16,6 +16,7 @@
 #include "debug.h"
 #endif
 #include "resample.h"
+#include "speaker_resample.h"
 #include "tusb.h"
 #include <algorithm>
 #include <cmath>
@@ -495,7 +496,7 @@ void audio_init() {
 
 static OpusEncoder *encoder;
 static OpusDecoder *decoder; // mic decoder
-static WDL_Resampler resampler_audio;
+static SpeakerResampler resampler_audio;
 
 // Speaker path: USB OUT PCM (core0 audio_fifo) -> resample -> opus encode ->
 // opus_buf for the haptics/speaker BT report. Non-blocking so core1 can also
@@ -509,13 +510,12 @@ static void PORT_FAST_FUNC(speaker_proc)() {
         return;
     }
     // 将 512 frames 重采样成 480 frames 以解决噪音问题。感谢 @Junhoo
-    WDL_ResampleSample *in_buf;
-    int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
-    for (int i = 0; i < nframes * 2; i++) {
+    float *in_buf = speaker_resample_input(resampler_audio);
+    for (int i = 0; i < SpeakerResampler::kInFrames * 2; i++) {
         in_buf[i] = audio_element.data[i];
     }
-    static WDL_ResampleSample out_buf[480 * 2];
-    resampler_audio.ResampleOut(out_buf, nframes, 480, 2);
+    static float out_buf[SpeakerResampler::kOutFrames * 2];
+    speaker_resample_process(resampler_audio, out_buf);
 
     static uint8_t out[SPEAKER_OPUS_SIZE];
     const int encoded_len = opus_encode_float(encoder, out_buf, 480, out, sizeof(out));
@@ -602,10 +602,7 @@ void PORT_FAST_FUNC(core1_entry)() {
     opus_encoder_ctl(encoder,OPUS_SET_BITRATE(200 * 8 * 100));
     opus_encoder_ctl(encoder,OPUS_SET_VBR(false));
     opus_encoder_ctl(encoder,OPUS_SET_COMPLEXITY(0)); // max 4
-    resampler_audio.SetMode(false, 0, true, 12, 15);
-    resampler_audio.SetRates(51200, 48000);
-    resampler_audio.SetFeedMode(true);
-    resampler_audio.Prealloc(2, 512, 480);
+    speaker_resample_init(resampler_audio);
     decoder = opus_decoder_create(48000, MIC_CHANNELS, &error);
     if (error != 0) {
         printf("[Audio] OpusDecoder create failed\n");
