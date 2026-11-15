@@ -17,9 +17,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "pico.h"
+#include "port/port_mem.h"
 
-void *__not_in_flash_func(memcpy)(void *restrict dst, const void *restrict src, size_t n) {
+void *PORT_FAST_FUNC(memcpy)(void *restrict dst, const void *restrict src, size_t n) {
     uint8_t *d = (uint8_t *) dst;
     const uint8_t *s = (const uint8_t *) src;
     if ((((uintptr_t) d | (uintptr_t) s) & 3u) == 0u) {
@@ -34,7 +34,7 @@ void *__not_in_flash_func(memcpy)(void *restrict dst, const void *restrict src, 
     return dst;
 }
 
-void *__not_in_flash_func(memset)(void *dst, int c, size_t n) {
+void *PORT_FAST_FUNC(memset)(void *dst, int c, size_t n) {
     uint8_t *d = (uint8_t *) dst;
     const uint8_t b = (uint8_t) c;
     if (((uintptr_t) d & 3u) == 0u) {
@@ -48,7 +48,7 @@ void *__not_in_flash_func(memset)(void *dst, int c, size_t n) {
     return dst;
 }
 
-void *__not_in_flash_func(memmove)(void *dst, const void *src, size_t n) {
+void *PORT_FAST_FUNC(memmove)(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *) dst;
     const uint8_t *s = (const uint8_t *) src;
     if (d == s || n == 0u) return dst;

@@ -1,0 +1,12 @@
+# Partition table for the 16MB flash on ESP32-S31-WROOM-3.
+#
+# The "config" entry is the ESP32 equivalent of the last-flash-sector config
+# region the RP2350 build uses. Keep its size in step with
+# port::kConfigStorageSize in src/port/esp32s31/port_flash_impl.h.
+#
+# Name,     Type, SubType,  Offset,   Size,   Flags
+nvs,        data, nvs,      0x9000,   0x6000,
+phy_init,   data, phy,      0xf000,   0x1000,
+factory,    app,  factory,  0x10000,  4M,
+config,     data, 0x40,     ,         0x1000,
+btstack,    data, 0x41,     ,         0x4000,

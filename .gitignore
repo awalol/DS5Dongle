@@ -6,3 +6,10 @@ example
 .DS_Store
 .cache
 /tools/__pycache__
+build-baseline/
+build-orig/
+sdkconfig
+sdkconfig.old
+ports/esp32s31/build/
+ports/esp32s31/managed_components/
+build-pico/

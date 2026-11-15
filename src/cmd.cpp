@@ -2,6 +2,7 @@
 // Created by awalol on 2026/5/4.
 //
 
+#include "port/port.h"
 #include "cmd.h"
 
 #include <algorithm>
@@ -12,7 +13,6 @@
 #include "button_shortcut.h"
 #include "config.h"
 #include "device/usbd.h"
-#include "pico/time.h"
 #include "audio.h"
 #include "usb.h"
 
@@ -43,8 +43,8 @@ uint16_t pico_cmd_get(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
     }
     if (report_id == 0xf8) {
         printf("[HID] Receive 0xf8 getting firmware version\n");
-        const auto len = std::min(strlen(PICO_PROGRAM_VERSION_STRING), static_cast<size_t>(reqlen));
-        memcpy(buffer, PICO_PROGRAM_VERSION_STRING, len);
+        const auto len = std::min(strlen(DS5_FIRMWARE_VERSION), static_cast<size_t>(reqlen));
+        memcpy(buffer, DS5_FIRMWARE_VERSION, len);
         return len;
     }
     if (report_id == 0xf9) {

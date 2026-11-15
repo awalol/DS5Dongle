@@ -27,6 +27,8 @@ bool bt_disconnect();
 bool bt_is_connected();
 void bt_set_scan_idle();
 void bt_set_scan_active();
+// Periodic hook; call from the main loop alongside the other *_task()s.
+void bt_task();
 void bt_write(const uint8_t *data, uint16_t len);
 void bt_get_signal_strength(int8_t *rssi);
 std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len);
@@ -35,10 +37,17 @@ std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len);
 // stack until the matching 0xA3 response arrives, or until timeout_ms expires.
 // Returns the cached/just-received report body (without the report id byte).
 // Must be called from the main context (e.g. the USB GET_REPORT callback): it
-// drives cyw43_arch_poll() itself and never calls tud_task().
+// drives port::bt_transport_poll() itself and never calls tud_task().
 std::vector<uint8_t> get_feature_data_live(uint8_t reportId, uint16_t timeout_ms);
 
 void init_feature();
+
+// Remember what the host last asked the lightbar to be, so the lightbar
+// handover can re-apply that rather than overriding it with the firmware default.
+void bt_note_host_led(uint8_t r, uint8_t g, uint8_t b);
+// Likewise for the player indicators: PlayerLight1..5 in bits 0..4,
+// PlayerLightFade in bit 5.
+void bt_note_host_player(uint8_t bits);
 void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len);
 void bt_inquiring_led();
 // BOOTSEL button actions, dispatched from button_functions.cpp.
