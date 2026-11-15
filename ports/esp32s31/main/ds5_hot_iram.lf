@@ -88,4 +88,4 @@ entries:
 [mapping:ds5_wdl_hot]
 archive: libwdl_resampler.a
 entries:
-    resample (noflash)
+    wdl_resample (noflash)
