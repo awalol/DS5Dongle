@@ -733,7 +733,9 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                         is_dse = false;
                     }
 #if !ENABLE_SERIAL
-                    usb_reconnect(false);
+                    if (!wake_defer_usb_reconnect()) {
+                        usb_reconnect(false);
+                    }
 #endif
                 }
             }

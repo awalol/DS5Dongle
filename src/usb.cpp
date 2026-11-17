@@ -11,6 +11,7 @@
 #include "wake.h"
 #include "audio.h"
 #include "pico/time.h"
+#include "hardware/watchdog.h"
 
 // USB descriptor mode: true exposes only the wake keyboard; false exposes the full device.
 bool usb_keyboard_only = false;
@@ -27,7 +28,9 @@ void usb_reconnect(bool keyboard_only) {
     extern bool spk_active;
     spk_active = false;
     set_mic_active(false);
-    sleep_ms(150);
+    watchdog_update();
+    sleep_ms(300);
+    watchdog_update();
     tud_connect();
 }
 
