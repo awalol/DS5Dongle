@@ -64,12 +64,19 @@ enum {
     CONFIG_DESC_LEN_BASE = 0x00E3 + CONFIG_DESC_LEN_AUDIO_IAD,
     // Keyboard and Consumer Control interfaces add 25 bytes each:
     //   9 (interface) + 9 (HID class) + 7 (EP IN) = 25
-    CONFIG_DESC_LEN_SHORTCUT_HID =
+    CONFIG_DESC_LEN_KBD_HID =
 #ifdef ENABLE_WAKE_HID
-        50,
+        25,
 #else
         0,
 #endif
+    CONFIG_DESC_LEN_CONSUMER_HID =
+#ifdef ENABLE_WAKE_HID
+        25,
+#else
+        0,
+#endif
+    CONFIG_DESC_LEN_SHORTCUT_HID = CONFIG_DESC_LEN_KBD_HID + CONFIG_DESC_LEN_CONSUMER_HID,
     CONFIG_DESC_LEN_TOTAL = CONFIG_DESC_LEN_BASE + CONFIG_DESC_LEN_SHORTCUT_HID
 #if ENABLE_SERIAL
         + TUD_CDC_DESC_LEN
@@ -492,17 +499,35 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
         descriptor_configuration[offset - 16] = 0xC5;
     }
 
-    // Advertise REMOTE_WAKEUP only when wake is on. Include the keyboard and consumer
-    // interfaces (the LAST two descriptor blocks) when wake or the explicit keyboard
-    // switch is on. With both off this is byte-identical to the base descriptor.
+#ifdef ENABLE_WAKE_HID
+    // Advertise REMOTE_WAKEUP only when wake is on. Include the keyboard interface when
+    // wake, keyboard shortcuts, or sleep_on_dock is on; include the consumer/system-control
+    // interface only when keyboard shortcuts or sleep_on_dock is on (wake alone only needs
+    // the boot keyboard). With all three off this is byte-identical to the base descriptor.
     const bool wake = get_config().enable_wake;
-    const bool kbd = wake || get_config().enable_keyboard || get_config().sleep_on_dock;
+    const bool sleep_on_dock = get_config().sleep_on_dock;
+    const bool consumer = get_config().enable_keyboard || sleep_on_dock;
+    const bool kbd = wake || consumer;
     descriptor_configuration[7] = wake ? 0xE0 : 0xC0; // bmAttributes (REMOTE_WAKEUP bit)
-    const uint16_t total = kbd ? CONFIG_DESC_LEN_TOTAL
-                               : (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_SHORTCUT_HID);
-    descriptor_configuration[2] = (uint8_t) (total & 0xFF);                  // wTotalLength lo
-    descriptor_configuration[3] = (uint8_t) (total >> 8);                    // wTotalLength hi
-    descriptor_configuration[4] = kbd ? ITF_NUM_TOTAL : (ITF_NUM_TOTAL - 2); // bNumInterfaces
+    uint16_t total = CONFIG_DESC_LEN_TOTAL;
+    uint8_t num_itf = ITF_NUM_TOTAL;
+    if (!kbd) {
+        total = (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_SHORTCUT_HID);
+        num_itf = ITF_NUM_TOTAL - 2;
+    } else if (!consumer) {
+        total = (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_CONSUMER_HID);
+        num_itf = ITF_NUM_TOTAL - 1;
+    } else {
+        // Patch wDescriptorLength on the trailing Consumer/System Control HID descriptor:
+        // expose System Control (Report ID 2) only when sleep_on_dock is enabled.
+        const uint16_t consumer_report_len = sleep_on_dock ? 56 : 25;
+        descriptor_configuration[CONFIG_DESC_LEN_TOTAL - 9] = (uint8_t) (consumer_report_len & 0xFF);
+        descriptor_configuration[CONFIG_DESC_LEN_TOTAL - 8] = (uint8_t) (consumer_report_len >> 8);
+    }
+    descriptor_configuration[2] = (uint8_t) (total & 0xFF); // wTotalLength lo
+    descriptor_configuration[3] = (uint8_t) (total >> 8);   // wTotalLength hi
+    descriptor_configuration[4] = num_itf;                  // bNumInterfaces
+#endif
     return descriptor_configuration;
 }
 
@@ -942,8 +967,9 @@ uint8_t const desc_hid_report_kbd[] = {
 static_assert(sizeof(desc_hid_report_kbd) == 45, "keyboard report descriptor length must match config descriptor" );
 
 // 56-byte Consumer + System Control report descriptor:
-// Report ID 1: Consumer Control (16-bit usage array)
-// Report ID 2: System Control (System Sleep / Power Down / Wake Up)
+// Bytes 0..24 (25 bytes): Report ID 1: Consumer Control (16-bit usage array)
+// Bytes 25..55 (31 bytes): Report ID 2: System Control (1-bit flags: Power Down, Sleep, Wake Up)
+// When sleep_on_dock is disabled, wDescriptorLength is set to 25 so only Consumer Control is exposed.
 uint8_t const desc_hid_report_consumer[] = {
     0x05, 0x0C,       // Usage Page (Consumer)
     0x09, 0x01,       // Usage (Consumer Control)
@@ -962,15 +988,15 @@ uint8_t const desc_hid_report_consumer[] = {
     0x09, 0x80,       // Usage (System Control)
     0xA1, 0x01,       // Collection (Application)
     0x85, 0x02,       //   Report ID (2)
-    0x15, 0x01,       //   Logical Minimum (1)
-    0x25, 0x03,       //   Logical Maximum (3)
-    0x75, 0x02,       //   Report Size (2 bits)
-    0x95, 0x01,       //   Report Count (1)
-    0x09, 0x81,       //   Usage (System Power Down)
-    0x09, 0x82,       //   Usage (System Sleep)
-    0x09, 0x83,       //   Usage (System Wake Up)
-    0x81, 0x00,       //   Input (Data,Array,Abs)
-    0x75, 0x06,       //   Report Size (6 bits padding)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x25, 0x01,       //   Logical Maximum (1)
+    0x75, 0x01,       //   Report Size (1 bit)
+    0x95, 0x03,       //   Report Count (3)
+    0x09, 0x81,       //   Usage (System Power Down) -- bit 0 (0x01)
+    0x09, 0x82,       //   Usage (System Sleep)      -- bit 1 (0x02)
+    0x09, 0x83,       //   Usage (System Wake Up)    -- bit 2 (0x04)
+    0x81, 0x02,       //   Input (Data,Var,Abs)
+    0x75, 0x05,       //   Report Size (5 bits padding)
     0x95, 0x01,       //   Report Count (1)
     0x81, 0x01,       //   Input (Const)
     0xC0              // End Collection
