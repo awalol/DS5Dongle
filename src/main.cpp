@@ -179,6 +179,7 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
         }
         return 0;
     }
+    if (usb_keyboard_only) return 0;
 #endif
     (void) itf;
     (void) report_id;

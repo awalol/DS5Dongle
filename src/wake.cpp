@@ -219,7 +219,7 @@ extern "C" void tud_resume_cb(void) {
     }
 
 #if !ENABLE_SERIAL
-    if (!bt_is_connected()) {
+    if (!bt_is_connected() && !host_sleep_in_progress()) {
         if (!get_config().enable_wake) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {
@@ -243,7 +243,7 @@ extern "C" void tud_mount_cb(void) {
     // Remove the ghost controller on resume/re-enumeration; retain only the wake keyboard when enabled.
     // If USB keep-charging is enabled, the PC may show a ghost device after startup/resume.
 #if !ENABLE_SERIAL
-    if (!bt_is_connected()) {
+    if (!bt_is_connected() && !host_sleep_in_progress()) {
         if (!get_config().enable_wake) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {
@@ -472,7 +472,7 @@ void wake_task(void) {
     // re-enumeration so the awake host sees the disconnect and mounts the full
     // DualSense composite device. Also recover if the controller is connected over
     // BT while USB is still stuck in keyboard-only mode or waiting for remount.
-    if (!host_suspended && !tud_suspended() && !wake_keyboard_busy() &&
+    if (!host_suspended && !tud_suspended() && !wake_keyboard_busy() && !host_sleep_in_progress() &&
         (resume_at_us == 0 || now - resume_at_us >= WAKE_RECONNECT_SETTLE_US)) {
         const bool need_full_device = bt_is_connected() && usb_keyboard_only && !usb_reconfiguring;
         const bool mount_stalled = bt_is_connected() && usb_reconfiguring &&

@@ -56,7 +56,12 @@ bool shortcut_slot_valid(const ButtonShortcut &shortcut) {
 
 static constexpr uint8_t KEYBOARD_INSTANCE = 1;
 static constexpr uint8_t CONSUMER_INSTANCE = 2;
+static constexpr uint8_t SLEEP_INSTANCE = 1; // Interface 1 in descriptor_keyboard_sleep
 static constexpr uint32_t KEY_PRESS_MS = 30;
+static constexpr uint32_t HOST_SLEEP_MOUNT_SETTLE_MS = 150;
+static constexpr uint32_t HOST_SLEEP_HOLD_MS = 50;
+static constexpr uint32_t HOST_SLEEP_GRACE_MS = 3000;
+static constexpr uint32_t HOST_SLEEP_TIMEOUT_MS = 5000;
 
 static bool release_pending = false;
 static absolute_time_t release_time = nil_time;
@@ -98,6 +103,10 @@ static bool keyboard_dirty = false;
 static bool wake_owned_keyboard = false;
 static bool host_sleep_pending = false;
 static bool host_sleep_active = false;
+static absolute_time_t host_sleep_ready_at = nil_time;
+static absolute_time_t host_sleep_release_at = nil_time;
+static absolute_time_t host_sleep_deadline = nil_time;
+static absolute_time_t host_sleep_grace_until = nil_time;
 
 static bool shortcuts_available() {
     return !usb_keyboard_only && !usb_reconfiguring && tud_mounted() && !tud_suspended();
@@ -187,14 +196,6 @@ static bool has_double_tap_partner(uint8_t slot, const ButtonShortcut &shortcut)
 // Release only the timed pulse; keyboard holds remain in the merged report.
 static bool send_release(uint8_t instance) {
     if (instance == CONSUMER_INSTANCE) {
-        if (host_sleep_active) {
-            uint8_t zero = 0;
-            if (tud_hid_n_report(CONSUMER_INSTANCE, 2, &zero, sizeof(zero))) {
-                host_sleep_active = false;
-                return true;
-            }
-            return false;
-        }
         uint16_t usage = 0;
         return tud_hid_n_report(CONSUMER_INSTANCE, 1, &usage, sizeof(usage));
     }
@@ -408,8 +409,6 @@ void button_shortcut_reset() {
     pending_mask = 0;
     engaged_mask = 0;
     chord_claimed_mask = 0;
-    host_sleep_pending = false;
-    host_sleep_active = false;
     modifier_hold_active_mask = 0;
     for (uint8_t i = 0; i < BUTTON_SHORTCUT_COUNT; ++i) {
         tap_count[i] = 0;
@@ -417,7 +416,46 @@ void button_shortcut_reset() {
     }
 }
 
+static void host_sleep_task() {
+    if (host_sleep_pending) {
+        if (time_reached(host_sleep_deadline)) {
+            host_sleep_pending = false;
+            host_sleep_ready_at = nil_time;
+            usb_sleep_mode = false;
+            return;
+        }
+        if (usb_sleep_mode && !usb_reconfiguring && tud_mounted() && !tud_suspended()) {
+            if (is_nil_time(host_sleep_ready_at)) {
+                host_sleep_ready_at = make_timeout_time_ms(HOST_SLEEP_MOUNT_SETTLE_MS);
+            } else if (time_reached(host_sleep_ready_at) && tud_hid_n_ready(SLEEP_INSTANCE)) {
+                uint8_t sleep_cmd = 0x02; // System Sleep (Report ID 2: System Control)
+                if (tud_hid_n_report(SLEEP_INSTANCE, 2, &sleep_cmd, sizeof(sleep_cmd))) {
+                    host_sleep_pending = false;
+                    host_sleep_active = true;
+                    host_sleep_ready_at = nil_time;
+                    host_sleep_release_at = make_timeout_time_ms(HOST_SLEEP_HOLD_MS);
+                }
+            }
+        }
+    } else if (host_sleep_active) {
+        if (time_reached(host_sleep_release_at) && tud_hid_n_ready(SLEEP_INSTANCE)) {
+            uint8_t zero = 0;
+            if (tud_hid_n_report(SLEEP_INSTANCE, 2, &zero, sizeof(zero))) {
+                host_sleep_active = false;
+                host_sleep_grace_until = make_timeout_time_ms(HOST_SLEEP_GRACE_MS);
+#if !ENABLE_SERIAL
+                if (!get_config().enable_wake && !bt_is_connected()) {
+                    tud_disconnect();
+                }
+#endif
+            }
+        }
+    }
+}
+
 void button_shortcut_task() {
+    host_sleep_task();
+
     // Also called without BT input so endpoint backpressure/disconnect releases retry.
     if (!shortcuts_available()) {
         if (!unavailable_reset) button_shortcut_reset();
@@ -456,14 +494,6 @@ void button_shortcut_task() {
         }
         // A busy consumer endpoint must not delay a physical keyboard release.
     }
-    if (host_sleep_pending && !release_pending && !consumer_clear_pending && tud_hid_n_ready(CONSUMER_INSTANCE)) {
-        uint8_t sleep_cmd = 0x02; // System Sleep (Report ID 2: System Control)
-        if (tud_hid_n_report(CONSUMER_INSTANCE, 2, &sleep_cmd, sizeof(sleep_cmd))) {
-            host_sleep_active = true;
-            start_pulse(CONSUMER_INSTANCE);
-            host_sleep_pending = false;
-        }
-    }
     send_keyboard_state(release_pending && release_instance == KEYBOARD_INSTANCE);
     dispatch_pending(); // Retry queued pulses even if Bluetooth stops reporting.
 
@@ -492,7 +522,16 @@ void button_shortcut_start_learning() {
 
 void trigger_host_sleep() {
     host_sleep_pending = true;
-    button_shortcut_task();
+    host_sleep_active = false;
+    host_sleep_ready_at = nil_time;
+    host_sleep_deadline = make_timeout_time_ms(HOST_SLEEP_TIMEOUT_MS);
+    host_sleep_grace_until = nil_time;
+    usb_reconnect_sleep();
+}
+
+bool host_sleep_in_progress() {
+    return host_sleep_pending || host_sleep_active ||
+           (!is_nil_time(host_sleep_grace_until) && !time_reached(host_sleep_grace_until));
 }
 
 #endif // ENABLE_WAKE_HID
