@@ -254,8 +254,12 @@ void handle_motion(const USBGetStateData &state) {
         }
         session = false;
         session_scroll = false;
-        // Drop sub-pixel / sub-notch leftovers so the next touch starts clean.
-        acc_x = acc_y = acc_wheel = acc_pan = 0;
+        // Drop only sub-pixel / sub-notch leftovers so the next touch starts clean.
+        // Whole units still owed to a busy endpoint stay queued for touchpad_mouse_task().
+        acc_x = std::trunc(acc_x);
+        acc_y = std::trunc(acc_y);
+        acc_wheel = std::trunc(acc_wheel);
+        acc_pan = std::trunc(acc_pan);
     }
 }
 

@@ -88,6 +88,8 @@ int main() {
         finger(0, true, 100, 500, idx); tick();
         for (int i = 1; i <= 10; ++i) { finger(0, true, 100 + 60 * i, 500, idx); tick(); }
         lift(); tick(300);
+        // A fast swipe can owe more than one report's worth (127): it is still delivered.
+        for (int i = 0; i < 8; ++i) touchpad_mouse_task();
         return total_x;
     };
     cfg.touchpad_mouse_accel = 0;
@@ -137,6 +139,13 @@ int main() {
     assert(total_x == 0);
     ready = true; touchpad_mouse_task(); assert(total_x > 0);
     lift(); tick(300);
+
+    // A touch that ends while the endpoint is busy still delivers its whole movement.
+    total_x = 0; ready = false;
+    finger(0, true, 100, 100, 15); tick(); finger(0, true, 101, 100, 15); tick();
+    finger(0, true, 102, 100, 15); tick(); lift(); tick(300);
+    assert(total_x == 0);
+    ready = true; touchpad_mouse_task(); assert(total_x == 2);
 
     // Off, or not enumerated: nothing is sent and the report is untouched.
     cfg.touchpad_mouse = TouchpadMouseOff; reset_out();
