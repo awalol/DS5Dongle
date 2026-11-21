@@ -304,6 +304,43 @@ Limitations:
 - Two DPad directions cannot form a chord because the controller reports only one DPad direction at a time; the tool rejects such pairs.
 - Due to a Windows limitation, volume actions adjust the DualSense audio endpoint only; they cannot adjust the currently selected default audio device.
 
+## Touchpad as mouse (optional)
+
+The DualSense touchpad can drive the host's cursor, for navigating the desktop without a mouse.
+
+| Gesture | Result |
+|---|---|
+| One finger moves | Moves the cursor (fast swipes are accelerated) |
+| Two fingers move | Scrolls vertically and horizontally (natural direction) |
+| Touchpad click | Left click; with two fingers down, right click. Hold the click and move to drag |
+| Quick tap | Left click; a two-finger tap is a right click (can be turned off) |
+| **PS + touchpad click** | Turns the mouse off or back on (it starts on) |
+
+Enable it and reconnect USB so the mouse is enumerated:
+
+```sh
+python tools/config_tool.py set touchpad_mouse=1   # 1: mouse + gamepad, 2: mouse only
+python tools/config_tool.py set touchpad_mouse_speed=10   # 1-20, default 10
+```
+
+| Setting | Values |
+|---|---|
+| `touchpad_mouse` | `0` off (default), `1` mouse + gamepad, `2` mouse only |
+| `touchpad_mouse_speed` | `1`-`20` cursor speed, `10` default |
+| `touchpad_mouse_scroll_speed` | `1`-`20` two-finger scroll speed, `10` default |
+| `touchpad_mouse_scroll_invert` | `0` natural scrolling (default), `1` traditional |
+| `touchpad_mouse_tap_disable` | `0` tap to click (default), `1` click only |
+| `touchpad_mouse_accel` | `0`-`10` pointer acceleration: fast swipes move further. `0` off, `3` default |
+
+- `touchpad_mouse=1` keeps sending the touchpad to games as well, so Steam Input or a game may also react to it.
+- `touchpad_mouse=2` hides the touchpad (touches and click) from the gamepad while the mouse is on. Turn the
+  mouse off with PS + touchpad click to give the touchpad back to games.
+- The PS + touchpad click chord itself never reaches the game as a touchpad click, but the PS press does, so it may
+  open the Steam overlay or Game Bar.
+
+The mouse is a collection on the existing Consumer Control HID interface; enabling it exposes that interface (and the
+keyboard one) like `enable_keyboard`. With `touchpad_mouse=0` (the default) the USB descriptors are unchanged.
+
 ## Wake-on-PS (optional)
 
 Enabling the **Wake PC from sleep on PS button** toggle in the [web config](#configuration) makes the dongle present two

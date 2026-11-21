@@ -319,6 +319,7 @@ target_compile_definitions(ds5-bridge PRIVATE ENABLE_WAKE_HID)
 target_sources(ds5-bridge PRIVATE
         src/wake.cpp
         src/button_shortcut.cpp
+        src/touchpad_mouse.cpp
 )
 
 option(WAKE_DEBUG "Print wake-FSM transitions to UART (developer use)" OFF)

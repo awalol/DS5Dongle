@@ -156,6 +156,32 @@ void config_valid() {
         body->sleep_on_dock = 0;
         printf("[Config] sleep_on_dock is invalid\n");
     }
+    if (body->touchpad_mouse > TouchpadMouseExclusive) {
+        body->touchpad_mouse = TouchpadMouseOff;
+        printf("[Config] touchpad_mouse is invalid\n");
+    }
+    if (body->touchpad_mouse_speed < TOUCHPAD_MOUSE_SPEED_MIN ||
+        body->touchpad_mouse_speed > TOUCHPAD_MOUSE_SPEED_MAX) {
+        body->touchpad_mouse_speed = TOUCHPAD_MOUSE_SPEED_DEFAULT;
+        printf("[Config] touchpad_mouse_speed is invalid\n");
+    }
+    if (body->touchpad_mouse_scroll_speed < TOUCHPAD_MOUSE_SPEED_MIN ||
+        body->touchpad_mouse_scroll_speed > TOUCHPAD_MOUSE_SPEED_MAX) {
+        body->touchpad_mouse_scroll_speed = TOUCHPAD_MOUSE_SPEED_DEFAULT;
+        printf("[Config] touchpad_mouse_scroll_speed is invalid\n");
+    }
+    if (body->touchpad_mouse_scroll_invert > 1) {
+        body->touchpad_mouse_scroll_invert = 0;
+        printf("[Config] touchpad_mouse_scroll_invert is invalid\n");
+    }
+    if (body->touchpad_mouse_tap_disable > 1) {
+        body->touchpad_mouse_tap_disable = 0;
+        printf("[Config] touchpad_mouse_tap_disable is invalid\n");
+    }
+    if (body->touchpad_mouse_accel > TOUCHPAD_MOUSE_ACCEL_MAX) {
+        body->touchpad_mouse_accel = TOUCHPAD_MOUSE_ACCEL_DEFAULT;
+        printf("[Config] touchpad_mouse_accel is invalid\n");
+    }
     button_remap_valid();
     shortcut_valid();
 }
