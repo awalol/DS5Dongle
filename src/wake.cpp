@@ -176,7 +176,7 @@ extern "C" void tud_resume_cb(void) {
     suspend_at_us = 0;   // resumed before the debounce elapsed -> cancel the disconnect
 
 #if !ENABLE_SERIAL
-    if (!bt_is_connected()) {
+    if (!bt_is_connected() && !host_sleep_in_progress()) {
         if (!get_config().enable_wake) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {
@@ -198,7 +198,7 @@ extern "C" void tud_mount_cb(void) {
     // Remove the ghost controller on resume/re-enumeration; retain only the wake keyboard when enabled.
     // If USB keep-charging is enabled, the PC may show a ghost device after startup/resume.
 #if !ENABLE_SERIAL
-    if (!bt_is_connected()) {
+    if (!bt_is_connected() && !host_sleep_in_progress()) {
         if (!get_config().enable_wake) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {
