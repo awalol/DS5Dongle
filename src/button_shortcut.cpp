@@ -10,15 +10,30 @@
 #include "pico/time.h"
 #include "utils.h"
 
+bool shortcut_trigger_valid(uint8_t trigger) {
+    return trigger < Disable ||
+           (trigger >= SHORTCUT_STICK_FIRST && trigger <= SHORTCUT_STICK_LAST);
+}
+
+static bool is_stick_trigger(uint8_t trigger) {
+    return trigger >= SHORTCUT_STICK_FIRST && trigger <= SHORTCUT_STICK_LAST;
+}
+
+// Up+Down (or Left+Right) of one stick can never be held together.
+static bool opposite_stick_directions(uint8_t a, uint8_t b) {
+    if (!is_stick_trigger(a) || !is_stick_trigger(b)) return false;
+    return ((a - SHORTCUT_STICK_FIRST) ^ (b - SHORTCUT_STICK_FIRST)) == 1;
+}
+
 // Kept outside the ENABLE_WAKE_HID guard below: config_load() normalizes the
 // stored slots on every boot regardless of the wake HID interface.
 bool shortcut_slot_valid(const ButtonShortcut &shortcut) {
-    if (shortcut.trigger_a >= Disable) return false;
+    if (!shortcut_trigger_valid(shortcut.trigger_a)) return false;
     if (shortcut.flags & ~SHORTCUT_FLAG_MASK) return false;
     if ((shortcut.flags & SHORTCUT_FLAG_MODIFIER_HOLD) &&
         (shortcut.flags != SHORTCUT_FLAG_MODIFIER_HOLD ||
          shortcut.action != ShortcutActionKeyboard ||
-         shortcut.trigger_b >= Disable ||
+         !shortcut_trigger_valid(shortcut.trigger_b) ||
          shortcut.keyboard.modifiers == 0 || shortcut.keyboard.key < 0x04)) return false;
     if ((shortcut.flags & SHORTCUT_FLAG_HOLD) &&
         (shortcut.action != ShortcutActionKeyboard ||
@@ -29,7 +44,8 @@ bool shortcut_slot_valid(const ButtonShortcut &shortcut) {
         // Tap slots spell their tap count out in trigger_b.
         if (shortcut.flags & SHORTCUT_FLAG_DOUBLE_TAP) return false;
     } else {
-        if (shortcut.trigger_b >= Disable || shortcut.trigger_a == shortcut.trigger_b) {
+        if (!shortcut_trigger_valid(shortcut.trigger_b) ||
+            shortcut.trigger_a == shortcut.trigger_b) {
             return false;
         }
         // The DPad reports a single direction, so two directions can never be held
@@ -37,6 +53,7 @@ bool shortcut_slot_valid(const ButtonShortcut &shortcut) {
         if (shortcut.trigger_a <= DPadNorthWest && shortcut.trigger_b <= DPadNorthWest) {
             return false;
         }
+        if (opposite_stick_directions(shortcut.trigger_a, shortcut.trigger_b)) return false;
     }
 
     switch (shortcut.action) {
@@ -108,6 +125,35 @@ static absolute_time_t host_sleep_release_at = nil_time;
 static absolute_time_t host_sleep_deadline = nil_time;
 static absolute_time_t host_sleep_grace_until = nil_time;
 
+// Stick directions currently latched as pressed, bit = trigger - SHORTCUT_STICK_FIRST.
+static uint8_t stick_latched = 0;
+
+static void update_stick_latch(const USBGetStateData &state) {
+    // DualSense axes: 0 = left/up, 255 = right/down, 128 = centre.
+    const uint8_t axes[2][2] = {{state.LeftStickX, state.LeftStickY},
+                                {state.RightStickX, state.RightStickY}};
+    uint8_t next = 0;
+    for (uint8_t stick = 0; stick < 2; ++stick) {
+        const int x = axes[stick][0] - 128, y = axes[stick][1] - 128;
+        // Order matches ShortcutStickTrigger: Up, Down, Left, Right.
+        const int deflection[4] = {-y, y, -x, x};
+        for (uint8_t dir = 0; dir < 4; ++dir) {
+            const uint8_t bit = static_cast<uint8_t>(1u << (stick * 4 + dir));
+            const int threshold = (stick_latched & bit) ? SHORTCUT_STICK_RELEASE
+                                                         : SHORTCUT_STICK_PRESS;
+            if (deflection[dir] >= threshold) next |= bit;
+        }
+    }
+    stick_latched = next;
+}
+
+static bool trigger_pressed(const USBGetStateData &state, uint8_t trigger) {
+    if (is_stick_trigger(trigger)) {
+        return stick_latched & (1u << (trigger - SHORTCUT_STICK_FIRST));
+    }
+    return button_is_pressed(state, trigger);
+}
+
 static bool shortcuts_available() {
     return !usb_keyboard_only && !usb_reconfiguring && tud_mounted() && !tud_suspended();
 }
@@ -150,9 +196,9 @@ static bool send_keyboard_state(bool include_pulse) {
     return true;
 }
 
-// Triggers are ButtonIds below Disable (27), so one word holds them all.
-static constexpr uint32_t button_bit(uint8_t button) {
-    return button < Disable ? (1u << button) : 0u;
+// Triggers are ButtonIds below Disable (27) or stick directions (28..35).
+static constexpr uint64_t button_bit(uint8_t button) {
+    return button <= SHORTCUT_STICK_LAST ? (1ull << button) : 0u;
 }
 
 static bool is_tap_slot(const ButtonShortcut &shortcut) {
@@ -162,8 +208,8 @@ static bool is_tap_slot(const ButtonShortcut &shortcut) {
 
 // Both hold and pulse mappings use the same physical trigger semantics.
 static bool trigger_engaged(const USBGetStateData &state, const ButtonShortcut &shortcut) {
-    return button_is_pressed(state, shortcut.trigger_a) &&
-           (is_tap_slot(shortcut) || button_is_pressed(state, shortcut.trigger_b));
+    return trigger_pressed(state, shortcut.trigger_a) &&
+           (is_tap_slot(shortcut) || trigger_pressed(state, shortcut.trigger_b));
 }
 
 // Taps spell the count out in trigger_b, chords in the flags byte.
@@ -296,8 +342,10 @@ static void process_shortcuts(const USBGetStateData &state) {
     uint16_t new_engaged_mask = 0;
     uint16_t new_modifier_hold_active_mask = 0;
     uint16_t valid_mask = 0;
-    uint32_t chord_buttons = 0; // Buttons some configured chord uses.
-    uint32_t chord_held = 0; // Buttons of the chords held right now.
+    uint64_t chord_buttons = 0; // Buttons some configured chord uses.
+    uint64_t chord_held = 0; // Buttons of the chords held right now.
+
+    update_stick_latch(state);
     bool engaged_now[BUTTON_SHORTCUT_COUNT]{};
 
     // Chords are resolved first: a tap slot sharing one of their buttons has to
@@ -308,10 +356,10 @@ static void process_shortcuts(const USBGetStateData &state) {
         const bool engaged = trigger_engaged(state, shortcut);
         const uint16_t bit = static_cast<uint16_t>(1u << i);
         if (shortcut.flags & SHORTCUT_FLAG_MODIFIER_HOLD) {
-            const uint32_t buttons =
+            const uint64_t buttons =
                 button_bit(shortcut.trigger_a) | button_bit(shortcut.trigger_b);
             chord_buttons |= buttons;
-            const bool active = button_is_pressed(state, shortcut.trigger_a) &&
+            const bool active = trigger_pressed(state, shortcut.trigger_a) &&
                                 (engaged || (modifier_hold_active_mask & bit));
             if (active) {
                 new_modifier_hold_active_mask |= bit;
@@ -319,7 +367,7 @@ static void process_shortcuts(const USBGetStateData &state) {
                 // the B-up reports between them. Neither lone tap may leak out.
                 chord_held |= buttons;
                 next_keyboard.modifiers |= shortcut.keyboard.modifiers;
-                if (button_is_pressed(state, shortcut.trigger_b)) {
+                if (trigger_pressed(state, shortcut.trigger_b)) {
                     next_keyboard.keys[shortcut.keyboard.key] = true;
                 }
             }
@@ -336,7 +384,7 @@ static void process_shortcuts(const USBGetStateData &state) {
         valid_mask |= bit;
 
         if (!is_tap_slot(shortcut)) {
-            const uint32_t buttons =
+            const uint64_t buttons =
                     button_bit(shortcut.trigger_a) | button_bit(shortcut.trigger_b);
             chord_buttons |= buttons;
             if (engaged) chord_held |= buttons;
@@ -410,6 +458,7 @@ void button_shortcut_reset() {
     engaged_mask = 0;
     chord_claimed_mask = 0;
     modifier_hold_active_mask = 0;
+    stick_latched = 0;
     for (uint8_t i = 0; i < BUTTON_SHORTCUT_COUNT; ++i) {
         tap_count[i] = 0;
         tap_deadline[i] = nil_time;

@@ -18,6 +18,26 @@ constexpr uint8_t SHORTCUT_FLAG_MODIFIER_HOLD = 0x04;
 constexpr uint8_t SHORTCUT_FLAG_MASK =
     SHORTCUT_FLAG_DOUBLE_TAP | SHORTCUT_FLAG_HOLD | SHORTCUT_FLAG_MODIFIER_HOLD;
 constexpr uint32_t SHORTCUT_TAP_WINDOW_MS = 250;
+
+// Shortcut-only virtual triggers: analog stick directions act as buttons once
+// pushed past a threshold. They sit above the ButtonId range (Disable = 27 is
+// the remap "off" value), so the remap table and its protocol are unchanged.
+enum ShortcutStickTrigger : uint8_t {
+    ShortcutLeftStickUp = 28,
+    ShortcutLeftStickDown,
+    ShortcutLeftStickLeft,
+    ShortcutLeftStickRight,
+    ShortcutRightStickUp,
+    ShortcutRightStickDown,
+    ShortcutRightStickLeft,
+    ShortcutRightStickRight,
+};
+constexpr uint8_t SHORTCUT_STICK_FIRST = ShortcutLeftStickUp;
+constexpr uint8_t SHORTCUT_STICK_LAST = ShortcutRightStickRight;
+// Deflection from centre (128) on one axis, 0..127. Press and release differ so
+// a stick resting near the threshold does not chatter the trigger on and off.
+constexpr uint8_t SHORTCUT_STICK_PRESS = 80;   // ~63%
+constexpr uint8_t SHORTCUT_STICK_RELEASE = 56; // ~44%
 // The config UI pauses shortcut output for this long after it starts learning a
 // controller trigger, so the button being captured does not also fire its action.
 constexpr uint32_t SHORTCUT_LEARNING_WINDOW_MS = 5000;
@@ -48,6 +68,8 @@ struct __attribute__((packed)) ButtonShortcut {
 };
 
 bool shortcut_slot_valid(const ButtonShortcut &shortcut);
+// A ButtonId below Disable or a ShortcutStickTrigger.
+bool shortcut_trigger_valid(uint8_t trigger);
 
 #ifdef ENABLE_WAKE_HID
 void button_shortcut_tick(const USBGetStateData& state);

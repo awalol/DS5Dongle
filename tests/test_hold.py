@@ -15,14 +15,16 @@ spec.loader.exec_module(tool)
 class HoldTests(unittest.TestCase):
     def test_protocol(self):
         for text in ('1=Cross@hold:Space', '2=L1@hold:Ctrl+C',
-                     '3=L1+R1@hold:Shift', '4=Home:F13', '5=Home*2:F14'):
+                     '3=L1+R1@hold:Shift', '4=Home:F13', '5=Home*2:F14',
+                     '6=Home+LeftStickUp:VolumeUp', '7=RightStickLeft*2:Play'):
             slot, value = tool.parse_shortcut_assignment(text)
             self.assertTrue(tool.shortcut_slot_valid(value))
             data = bytearray(tool.SHORTCUT_STORAGE_SIZE)
             tool.pack_shortcut(data, slot, value)
             self.assertEqual(tool.unpack_shortcut(data, slot), value)
         for text in ('1=Cross*2@hold:Space', '1=L1@hold:VolumeUp',
-                     '1=L1@hold:bt_disconnect'):
+                     '1=L1@hold:bt_disconnect',
+                     '1=LeftStickUp+LeftStickDown:VolumeUp'):
             with self.assertRaises(SystemExit):
                 tool.parse_shortcut_assignment(text)
 
@@ -47,7 +49,10 @@ inline uint64_t now = 0;
 inline auto make_timeout_time_ms(uint32_t ms) { return now + ms; }
 inline bool time_reached(absolute_time_t t) { return now >= t; }
 constexpr uint8_t Disable = 27, DPadNorthWest = 7;
-struct USBGetStateData { uint32_t buttons = 0; };
+struct USBGetStateData {
+    uint32_t buttons = 0;
+    uint8_t LeftStickX = 128, LeftStickY = 128, RightStickX = 128, RightStickY = 128;
+};
 inline bool button_is_pressed(const USBGetStateData& s, uint8_t b) {
     return b < 27 && (s.buttons & (1u << b));
 }
@@ -76,12 +81,13 @@ inline bool tud_hid_n_report(uint8_t, uint8_t, const void* data, uint16_t) {
     memcpy(&consumer_usage, data, sizeof(consumer_usage)); return true;
 }
 ''')
-            shutil.copyfile(ROOT / 'tests/hold_state_test.cpp', tmp / 'test.cpp')
-            exe = tmp / 'test.exe'
-            subprocess.run(['g++', '-std=c++17', '-DENABLE_WAKE_HID', '-I', str(tmp),
-                            str(tmp / 'button_shortcut.cpp'), str(tmp / 'test.cpp'),
-                            '-o', str(exe)], check=True)
-            subprocess.run([str(exe)], check=True)
+            for test in ('hold_state_test.cpp', 'stick_shortcut_test.cpp'):
+                shutil.copyfile(ROOT / 'tests' / test, tmp / test)
+                exe = tmp / (test + '.exe')
+                subprocess.run(['g++', '-std=c++17', '-DENABLE_WAKE_HID', '-I', str(tmp),
+                                str(tmp / 'button_shortcut.cpp'), str(tmp / test),
+                                '-o', str(exe)], check=True)
+                subprocess.run([str(exe)], check=True)
             # The standard build must keep validating config without HID references.
             subprocess.run(['g++', '-std=c++17', '-I', str(tmp), '-c',
                             str(tmp / 'button_shortcut.cpp'), '-o', str(tmp / 'standard.o')],
