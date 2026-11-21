@@ -60,9 +60,32 @@ int main() {
         finger(0, true, 500, 500 - 10 * i, 9); finger(1, true, 900, 500 - 10 * i, 10); tick();
     }
     assert(total_wheel < 0 && total_x == 0 && total_y == 0);
+    const long slow_wheel = total_wheel;
     // Lifting one finger after a scroll does not move the cursor.
     finger(1, false); finger(0, true, 600, 300, 9); tick(); assert(total_x == 0);
     lift(); tick(300);
+
+    // Scroll speed doubles the notches; invert flips the direction.
+    auto scroll_up = [](int idx) {
+        total_wheel = 0;
+        finger(0, true, 500, 500, idx); finger(1, true, 900, 500, idx + 1); tick(300);
+        for (int i = 1; i <= 10; ++i) {
+            finger(0, true, 500, 500 - 10 * i, idx); finger(1, true, 900, 500 - 10 * i, idx + 1); tick();
+        }
+        lift(); tick(300);
+        return total_wheel;
+    };
+    cfg.touchpad_mouse_scroll_speed = 20;
+    assert(scroll_up(20) < slow_wheel);
+    cfg.touchpad_mouse_scroll_invert = 1;
+    assert(scroll_up(22) > 0);
+    cfg.touchpad_mouse_scroll_speed = 10; cfg.touchpad_mouse_scroll_invert = 0;
+
+    // Tap to click can be turned off.
+    cfg.touchpad_mouse_tap_disable = 1; reset_out();
+    finger(0, true, 500, 500, 24); tick(); lift(); tick();
+    now_us += 25000; touchpad_mouse_task(); assert(nreports == 0);
+    cfg.touchpad_mouse_tap_disable = 0;
 
     // Exclusive mode hides the touchpad from the gamepad report while active.
     cfg.touchpad_mouse = TouchpadMouseExclusive;

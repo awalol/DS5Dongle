@@ -43,6 +43,9 @@ struct __attribute__((packed)) Config_body {
     uint8_t sleep_on_dock; // bool: 0 disable(default), 1 enable (suspend host PC on dock)
     uint8_t touchpad_mouse; // TouchpadMouseMode: 0 off(default), 1 mouse + gamepad, 2 mouse only
     uint8_t touchpad_mouse_speed; // [1,20] cursor speed, 10 = 1:1 touch units (default)
+    uint8_t touchpad_mouse_scroll_speed; // [1,20] two-finger scroll speed, 10 = default
+    uint8_t touchpad_mouse_scroll_invert; // bool: 0 natural scrolling (default), 1 traditional
+    uint8_t touchpad_mouse_tap_disable; // bool: 0 tap to click (default), 1 click only
 };
 
 static_assert(sizeof(Config_body) + 1 <= 63); // 0xF6 funcid + body

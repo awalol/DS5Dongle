@@ -5,7 +5,7 @@
 //   one finger moves     -> cursor movement (speed + simple acceleration)
 //   two fingers move     -> vertical / horizontal scroll (natural direction)
 //   touchpad click       -> left button, or right button with two fingers down
-//   quick tap            -> left click; two-finger tap -> right click
+//   quick tap            -> left click; two-finger tap -> right click (can be disabled)
 //   PS + touchpad click  -> toggle the mouse on/off at runtime
 //
 // Enabled with touchpad_mouse (1: shared with the gamepad, 2: mouse only) and a
@@ -33,7 +33,7 @@ constexpr uint8_t CONSUMER_INSTANCE = 2; // Shared with button_shortcut.cpp
 constexpr uint8_t MOUSE_LEFT = 0x01;
 constexpr uint8_t MOUSE_RIGHT = 0x02;
 
-// Touch units per wheel notch. The touchpad is 1920 x 1080 units.
+// Touch units per wheel notch at scroll speed 10. The touchpad is 1920 x 1080 units.
 constexpr float SCROLL_UNITS_PER_NOTCH = 40.0f;
 // Speed of a finger (units per report) at which acceleration doubles the gain.
 constexpr float ACCEL_REFERENCE = 24.0f;
@@ -218,9 +218,12 @@ void handle_motion(const USBGetStateData &state) {
         if (moved[0] && moved[1]) {
             const float avg_dx = (dx[0] + dx[1]) * 0.5f;
             const float avg_dy = (dy[0] + dy[1]) * 0.5f;
-            // Natural scrolling: content follows the fingers.
-            acc_wheel = clampf(acc_wheel + avg_dy / SCROLL_UNITS_PER_NOTCH, -ACCUM_LIMIT, ACCUM_LIMIT);
-            acc_pan = clampf(acc_pan - avg_dx / SCROLL_UNITS_PER_NOTCH, -ACCUM_LIMIT, ACCUM_LIMIT);
+            // Natural scrolling (default): content follows the fingers.
+            const auto &config = get_config();
+            float notches = config.touchpad_mouse_scroll_speed / (10.0f * SCROLL_UNITS_PER_NOTCH);
+            if (config.touchpad_mouse_scroll_invert) notches = -notches;
+            acc_wheel = clampf(acc_wheel + avg_dy * notches, -ACCUM_LIMIT, ACCUM_LIMIT);
+            acc_pan = clampf(acc_pan - avg_dx * notches, -ACCUM_LIMIT, ACCUM_LIMIT);
             session_travel += std::abs(static_cast<int32_t>(avg_dx)) + std::abs(static_cast<int32_t>(avg_dy));
         }
     } else if (fingers == 1 && !session_scroll) {
@@ -238,7 +241,8 @@ void handle_motion(const USBGetStateData &state) {
 
     if (!fingers && session) {
         // Last finger lifted: a short, still touch without a click is a tap.
-        const bool tap = !session_clicked && !combo_latched &&
+        const bool tap = !get_config().touchpad_mouse_tap_disable &&
+                         !session_clicked && !combo_latched &&
                          now - session_start_ms <= TAP_MAX_MS &&
                          session_travel <= TAP_MAX_TRAVEL;
         if (tap && tap_state == TapIdle) {

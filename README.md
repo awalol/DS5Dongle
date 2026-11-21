@@ -313,7 +313,7 @@ The DualSense touchpad can drive the host's cursor, for navigating the desktop w
 | One finger moves | Moves the cursor |
 | Two fingers move | Scrolls vertically and horizontally (natural direction) |
 | Touchpad click | Left click; with two fingers down, right click. Hold the click and move to drag |
-| Quick tap | Left click; a two-finger tap is a right click |
+| Quick tap | Left click; a two-finger tap is a right click (can be turned off) |
 | **PS + touchpad click** | Turns the mouse off or back on (it starts on) |
 
 Enable it and reconnect USB so the mouse is enumerated:
@@ -322,6 +322,14 @@ Enable it and reconnect USB so the mouse is enumerated:
 python tools/config_tool.py set touchpad_mouse=1   # 1: mouse + gamepad, 2: mouse only
 python tools/config_tool.py set touchpad_mouse_speed=10   # 1-20, default 10
 ```
+
+| Setting | Values |
+|---|---|
+| `touchpad_mouse` | `0` off (default), `1` mouse + gamepad, `2` mouse only |
+| `touchpad_mouse_speed` | `1`-`20` cursor speed, `10` default |
+| `touchpad_mouse_scroll_speed` | `1`-`20` two-finger scroll speed, `10` default |
+| `touchpad_mouse_scroll_invert` | `0` natural scrolling (default), `1` traditional |
+| `touchpad_mouse_tap_disable` | `0` tap to click (default), `1` click only |
 
 - `touchpad_mouse=1` keeps sending the touchpad to games as well, so Steam Input or a game may also react to it.
 - `touchpad_mouse=2` hides the touchpad (touches and click) from the gamepad while the mouse is on. Turn the

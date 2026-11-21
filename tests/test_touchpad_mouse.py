@@ -34,7 +34,10 @@ struct USBGetStateData {
     uint8_t ButtonPad : 1;
     TouchData Touch;
 };
-struct Config_body { uint8_t touchpad_mouse = 0; uint8_t touchpad_mouse_speed = 10; };
+struct Config_body {
+    uint8_t touchpad_mouse = 0, touchpad_mouse_speed = 10, touchpad_mouse_scroll_speed = 10;
+    uint8_t touchpad_mouse_scroll_invert = 0, touchpad_mouse_tap_disable = 0;
+};
 inline Config_body cfg;
 inline Config_body& get_config() { return cfg; }
 inline bool usb_keyboard_only = false, usb_reconfiguring = false;
@@ -59,10 +62,13 @@ inline bool tud_hid_n_report(uint8_t instance, uint8_t id, const void* data, uin
 class TouchpadMouseTests(unittest.TestCase):
     def test_config_fields(self):
         names = tool.FIELD_NAMES
-        self.assertEqual(names[-2:], ['touchpad_mouse', 'touchpad_mouse_speed'])
+        self.assertEqual(names[-5:], ['touchpad_mouse', 'touchpad_mouse_speed',
+                                      'touchpad_mouse_scroll_speed', 'touchpad_mouse_scroll_invert',
+                                      'touchpad_mouse_tap_disable'])
         cfg = {name: 0 for name in names}
         cfg.update(haptics_gain=1.0, audio_buffer_length=48, touchpad_mouse=2,
-                   touchpad_mouse_speed=10)
+                   touchpad_mouse_speed=10, touchpad_mouse_scroll_speed=20,
+                   touchpad_mouse_scroll_invert=1, touchpad_mouse_tap_disable=1)
         self.assertEqual(tool.unpack_config(tool.pack_config(cfg)), cfg)
         cfg['touchpad_mouse'] = 3
         with self.assertRaises(ValueError):
