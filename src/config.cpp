@@ -178,6 +178,10 @@ void config_valid() {
         body->touchpad_mouse_tap_disable = 0;
         printf("[Config] touchpad_mouse_tap_disable is invalid\n");
     }
+    if (body->touchpad_mouse_accel > TOUCHPAD_MOUSE_ACCEL_MAX) {
+        body->touchpad_mouse_accel = TOUCHPAD_MOUSE_ACCEL_DEFAULT;
+        printf("[Config] touchpad_mouse_accel is invalid\n");
+    }
     button_remap_valid();
     shortcut_valid();
 }

@@ -46,6 +46,7 @@ struct __attribute__((packed)) Config_body {
     uint8_t touchpad_mouse_scroll_speed; // [1,20] two-finger scroll speed, 10 = default
     uint8_t touchpad_mouse_scroll_invert; // bool: 0 natural scrolling (default), 1 traditional
     uint8_t touchpad_mouse_tap_disable; // bool: 0 tap to click (default), 1 click only
+    uint8_t touchpad_mouse_accel; // [0,10] pointer acceleration, 0 off, 3 default
 };
 
 static_assert(sizeof(Config_body) + 1 <= 63); // 0xF6 funcid + body

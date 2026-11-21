@@ -81,6 +81,24 @@ int main() {
     assert(scroll_up(22) > 0);
     cfg.touchpad_mouse_scroll_speed = 10; cfg.touchpad_mouse_scroll_invert = 0;
 
+    // Acceleration: a fast swipe moves further per unit with more acceleration,
+    // and exactly 1:1 (speed 10) with it off.
+    auto swipe = [](int idx) {
+        total_x = 0;
+        finger(0, true, 100, 500, idx); tick();
+        for (int i = 1; i <= 10; ++i) { finger(0, true, 100 + 60 * i, 500, idx); tick(); }
+        lift(); tick(300);
+        return total_x;
+    };
+    cfg.touchpad_mouse_accel = 0;
+    assert(swipe(30) == 600);
+    cfg.touchpad_mouse_accel = 3;
+    const long mild = swipe(31);
+    cfg.touchpad_mouse_accel = 10;
+    const long strong = swipe(32);
+    assert(600 < mild && mild < strong);
+    cfg.touchpad_mouse_accel = 3;
+
     // Tap to click can be turned off.
     cfg.touchpad_mouse_tap_disable = 1; reset_out();
     finger(0, true, 500, 500, 24); tick(); lift(); tick();

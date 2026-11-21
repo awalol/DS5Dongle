@@ -35,9 +35,10 @@ constexpr uint8_t MOUSE_RIGHT = 0x02;
 
 // Touch units per wheel notch at scroll speed 10. The touchpad is 1920 x 1080 units.
 constexpr float SCROLL_UNITS_PER_NOTCH = 40.0f;
-// Speed of a finger (units per report) at which acceleration doubles the gain.
+// At acceleration 10, a finger moving this many units per report doubles the
+// gain, up to 3x. Lower settings scale both the slope and the cap down; 0 is off.
 constexpr float ACCEL_REFERENCE = 24.0f;
-constexpr float ACCEL_MAX_FACTOR = 3.0f;
+constexpr float ACCEL_MAX_EXTRA = 2.0f;
 // A touch shorter and stiller than this, with no physical click, is a tap.
 constexpr uint32_t TAP_MAX_MS = 180;
 constexpr int32_t TAP_MAX_TRAVEL = 40;
@@ -231,7 +232,9 @@ void handle_motion(const USBGetStateData &state) {
         if (moved[i]) {
             const float fx = dx[i], fy = dy[i];
             const float speed = std::sqrt(fx * fx + fy * fy);
-            const float accel = clampf(1.0f + speed / ACCEL_REFERENCE, 1.0f, ACCEL_MAX_FACTOR);
+            const float strength = get_config().touchpad_mouse_accel / 10.0f;
+            const float accel = clampf(1.0f + strength * speed / ACCEL_REFERENCE, 1.0f,
+                                       1.0f + strength * ACCEL_MAX_EXTRA);
             const float gain = get_config().touchpad_mouse_speed / 10.0f * accel;
             acc_x = clampf(acc_x + fx * gain, -ACCUM_LIMIT, ACCUM_LIMIT);
             acc_y = clampf(acc_y + fy * gain, -ACCUM_LIMIT, ACCUM_LIMIT);

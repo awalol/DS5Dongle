@@ -257,6 +257,7 @@ FIELDS = [
     ("touchpad_mouse_scroll_speed","u8", lambda v: 0 <= v <= 20, "[1, 20] two-finger scroll speed, 10 = default (0 resets to default)"),
     ("touchpad_mouse_scroll_invert","u8", lambda v: v in (0, 1), "0:natural scrolling 1:traditional"),
     ("touchpad_mouse_tap_disable","u8", lambda v: v in (0, 1),   "0:tap to click 1:click only"),
+    ("touchpad_mouse_accel","u8",   lambda v: 0 <= v <= 10,      "[0, 10] pointer acceleration, 0 off, 3 default"),
 ]
 FIELD_NAMES = [f[0] for f in FIELDS]
 # Little-endian, no padding -- matches __attribute__((packed)) Config_body.

@@ -14,6 +14,8 @@ enum TouchpadMouseMode : uint8_t {
 constexpr uint8_t TOUCHPAD_MOUSE_SPEED_MIN = 1;
 constexpr uint8_t TOUCHPAD_MOUSE_SPEED_MAX = 20;
 constexpr uint8_t TOUCHPAD_MOUSE_SPEED_DEFAULT = 10;
+constexpr uint8_t TOUCHPAD_MOUSE_ACCEL_MAX = 10;
+constexpr uint8_t TOUCHPAD_MOUSE_ACCEL_DEFAULT = 3;
 // Report ID of the mouse collection inside the consumer-control HID interface.
 constexpr uint8_t TOUCHPAD_MOUSE_REPORT_ID = 3;
 
