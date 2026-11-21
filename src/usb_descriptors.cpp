@@ -28,6 +28,7 @@
 #include "config.h"
 #include "usb_descriptors.h"
 #include "usb.h"
+#include "touchpad_mouse.h"
 
 #ifndef ENABLE_SERIAL
 #define ENABLE_SERIAL 0
@@ -143,6 +144,10 @@ uint8_t const *tud_descriptor_device_cb(void) {
 // Shared keyboard interface; only the interface number varies between modes.
 #define WAKE_KEYBOARD_DESCRIPTOR(itf) \
     TUD_HID_DESCRIPTOR(itf, 0, HID_ITF_PROTOCOL_KEYBOARD, 45, 0x87, 8, 10)
+// Consumer + System Control part of desc_hid_report_consumer, without the mouse.
+constexpr uint16_t CONSUMER_REPORT_DESC_LEN = 56;
+// Touchpad mouse collection appended after it (Report ID 3).
+constexpr uint16_t MOUSE_REPORT_DESC_LEN = 63;
 #endif
 
 uint8_t descriptor_configuration[] = {
@@ -440,15 +445,15 @@ uint8_t descriptor_configuration[] = {
     0x00, // bCountryCode
     0x01, // bNumDescriptors
     0x22, // bDescriptorType: Report
-    0x38, 0x00, // wDescriptorLength: 56 (sizeof desc_hid_report_consumer)
+    0x38, 0x00, // wDescriptorLength: 56, or 119 with the touchpad mouse (patched at runtime)
 
     // Endpoint Descriptor (HID IN: EP8)
     0x07, // bLength
     0x05, // bDescriptorType (ENDPOINT)
     0x88, // bEndpointAddress: IN EP8
     0x03, // bmAttributes: Interrupt
-    0x08, 0x00, // wMaxPacketSize: 8 (2-byte usage, padded)
-    0x0A, // bInterval: 10ms
+    0x08, 0x00, // wMaxPacketSize: 8 (2-byte usage, padded; mouse report is 6 bytes)
+    0x0A, // bInterval: 10ms, or 1ms with the touchpad mouse (patched at runtime)
 #endif
 };
 
@@ -496,13 +501,26 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     // interfaces (the LAST two descriptor blocks) when wake or the explicit keyboard
     // switch is on. With both off this is byte-identical to the base descriptor.
     const bool wake = get_config().enable_wake;
-    const bool kbd = wake || get_config().enable_keyboard || get_config().sleep_on_dock;
+    const bool mouse = get_config().touchpad_mouse != TouchpadMouseOff;
+    const bool kbd = wake || get_config().enable_keyboard || get_config().sleep_on_dock || mouse;
     descriptor_configuration[7] = wake ? 0xE0 : 0xC0; // bmAttributes (REMOTE_WAKEUP bit)
     const uint16_t total = kbd ? CONFIG_DESC_LEN_TOTAL
                                : (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_SHORTCUT_HID);
     descriptor_configuration[2] = (uint8_t) (total & 0xFF);                  // wTotalLength lo
     descriptor_configuration[3] = (uint8_t) (total >> 8);                    // wTotalLength hi
     descriptor_configuration[4] = kbd ? ITF_NUM_TOTAL : (ITF_NUM_TOTAL - 2); // bNumInterfaces
+#ifdef ENABLE_WAKE_HID
+    // The consumer interface is the last block: HID class descriptor, then its
+    // 7-byte endpoint. The mouse collection sits at the end of the consumer report
+    // descriptor, so leaving it out is just the shorter length. A mouse also wants
+    // a faster poll than media keys. With the mouse off these bytes are unchanged.
+    constexpr auto consumer_ep = CONFIG_DESC_LEN_TOTAL - 7;
+    const uint16_t report_len = mouse ? CONSUMER_REPORT_DESC_LEN + MOUSE_REPORT_DESC_LEN : CONSUMER_REPORT_DESC_LEN;
+    descriptor_configuration[consumer_ep - 2] = (uint8_t) (report_len & 0xFF); // wDescriptorLength lo
+    descriptor_configuration[consumer_ep - 1] = (uint8_t) (report_len >> 8);   // wDescriptorLength hi
+    descriptor_configuration[consumer_ep + 6] = mouse ? 0x01 : 0x0A;           // bInterval
+    touchpad_mouse_enumerated = kbd && mouse;
+#endif
     return descriptor_configuration;
 }
 
@@ -973,9 +991,45 @@ uint8_t const desc_hid_report_consumer[] = {
     0x75, 0x06,       //   Report Size (6 bits padding)
     0x95, 0x01,       //   Report Count (1)
     0x81, 0x01,       //   Input (Const)
+    0xC0,             // End Collection
+
+    // Report ID 3: touchpad mouse (buttons, X, Y, wheel, AC Pan). Must stay last:
+    // the configuration descriptor drops it by reporting the shorter length.
+    0x05, 0x01,       // Usage Page (Generic Desktop)
+    0x09, 0x02,       // Usage (Mouse)
+    0xA1, 0x01,       // Collection (Application)
+    0x85, TOUCHPAD_MOUSE_REPORT_ID, //   Report ID (3)
+    0x09, 0x01,       //   Usage (Pointer)
+    0xA1, 0x00,       //   Collection (Physical)
+    0x05, 0x09,       //     Usage Page (Button)
+    0x19, 0x01,       //     Usage Minimum (1)
+    0x29, 0x03,       //     Usage Maximum (3)
+    0x15, 0x00,       //     Logical Minimum (0)
+    0x25, 0x01,       //     Logical Maximum (1)
+    0x95, 0x03,       //     Report Count (3)
+    0x75, 0x01,       //     Report Size (1)
+    0x81, 0x02,       //     Input (Data,Var,Abs) -- buttons
+    0x95, 0x01,       //     Report Count (1)
+    0x75, 0x05,       //     Report Size (5)
+    0x81, 0x01,       //     Input (Const) -- padding
+    0x05, 0x01,       //     Usage Page (Generic Desktop)
+    0x09, 0x30,       //     Usage (X)
+    0x09, 0x31,       //     Usage (Y)
+    0x09, 0x38,       //     Usage (Wheel)
+    0x15, 0x81,       //     Logical Minimum (-127)
+    0x25, 0x7F,       //     Logical Maximum (127)
+    0x75, 0x08,       //     Report Size (8)
+    0x95, 0x03,       //     Report Count (3)
+    0x81, 0x06,       //     Input (Data,Var,Rel) -- X, Y, wheel
+    0x05, 0x0C,       //     Usage Page (Consumer)
+    0x0A, 0x38, 0x02, //     Usage (AC Pan)
+    0x95, 0x01,       //     Report Count (1)
+    0x81, 0x06,       //     Input (Data,Var,Rel) -- horizontal scroll
+    0xC0,             //   End Collection
     0xC0              // End Collection
 };
-static_assert(sizeof(desc_hid_report_consumer) == 56, "consumer report descriptor length must match wDescriptorLength in config descriptor");
+static_assert(CONSUMER_REPORT_DESC_LEN == 56, "consumer report descriptor length must match wDescriptorLength in config descriptor");
+static_assert(sizeof(desc_hid_report_consumer) == CONSUMER_REPORT_DESC_LEN + MOUSE_REPORT_DESC_LEN, "mouse collection length must match MOUSE_REPORT_DESC_LEN");
 #endif
 
 // Invoked when received GET HID REPORT DESCRIPTOR

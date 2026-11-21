@@ -252,6 +252,8 @@ FIELDS = [
     ("packet_mode",        "u8",    lambda v: v in (0, 1),       "0:double packet 1:single packet"),
     ("disconnect_on_dock", "u8",    lambda v: v in (0, 1),       "0/1 (drop the BT link while the controller sits on a charger/dock)"),
     ("sleep_on_dock",      "u8",    lambda v: v in (0, 1),       "0/1 (suspend host PC when the controller sits on a dock)"),
+    ("touchpad_mouse",     "u8",    lambda v: v in (0, 1, 2),    "0:off 1:mouse + gamepad 2:mouse only (reconnect USB after changing)"),
+    ("touchpad_mouse_speed","u8",   lambda v: 0 <= v <= 20,      "[1, 20] cursor speed, 10 = default (0 resets to default)"),
 ]
 FIELD_NAMES = [f[0] for f in FIELDS]
 # Little-endian, no padding -- matches __attribute__((packed)) Config_body.

@@ -17,6 +17,7 @@
 #include "wake.h"
 #include "usb.h"
 #include "button_shortcut.h"
+#include "touchpad_mouse.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
@@ -46,6 +47,7 @@ void __not_in_flash_func(interrupt_loop)() {
     // TODO: Refactor for better code reuse
     if (get_config().polling_rate_mode != 3) {
         USBGetStateData report = interrupt_in_data;
+        touchpad_mouse_filter_report(report);
         button_remap_apply(report);
         if (!tud_hid_report(0x01, &report, sizeof(report))) {
             printf("[USBHID] tud_hid_report error\n");
@@ -64,6 +66,7 @@ void __not_in_flash_func(interrupt_loop)() {
 
     // Only send to TinyUSB if we actually grabbed fresh data
     if (should_send) {
+        touchpad_mouse_filter_report(report);
         button_remap_apply(report);
         if (!tud_hid_report(0x01, &report, sizeof(report))) {
             printf("[USBHID] tud_hid_report error\n");
@@ -150,6 +153,7 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
         memcpy(&interrupt_in_data, data + 3, sizeof(interrupt_in_data));
         if (!usb_keyboard_only && !usb_reconfiguring) {
             button_shortcut_tick(interrupt_in_data);
+            touchpad_mouse_tick(interrupt_in_data);
         }
 
         if (get_config().polling_rate_mode != 3) {
@@ -427,6 +431,7 @@ int main() {
         tud_task();
         wake_task();
         button_shortcut_task();
+        touchpad_mouse_task();
         audio_loop();
 #if ENABLE_DEBUG
         debug_log_core1_stack_usage();
