@@ -30,6 +30,7 @@ Examples:
   python config_tool.py shortcut 4=Home:F13
   python config_tool.py shortcut 5=Home*2:F14
   python config_tool.py shortcut 2=L3+R3:VolumeUp
+  python config_tool.py shortcut 7=Home+LeftStickUp:VolumeUp
   python config_tool.py shortcut 3=Create+Options:bt_disconnect
   python config_tool.py shortcut 6=Create+Options*2:bt_disconnect
   python config_tool.py shortcut 9=Mute*2:Play
@@ -217,6 +218,34 @@ BUTTON_NAME_TO_ID.update({
     "touchpad": BUTTON_NAME_TO_ID["pad"],
     "off": BUTTON_NAME_TO_ID["disable"],
 })
+
+# Shortcut-only virtual triggers (src/button_shortcut.h ShortcutStickTrigger):
+# analog stick directions, above the remap range so remaps never see them.
+STICK_TRIGGER_FIRST = 28
+STICK_TRIGGER_NAMES = (
+    "LeftStickUp", "LeftStickDown", "LeftStickLeft", "LeftStickRight",
+    "RightStickUp", "RightStickDown", "RightStickLeft", "RightStickRight",
+)
+STICK_TRIGGER_LAST = STICK_TRIGGER_FIRST + len(STICK_TRIGGER_NAMES) - 1
+STICK_NAME_TO_ID = {
+    normalize_button_name(name): STICK_TRIGGER_FIRST + index
+    for index, name in enumerate(STICK_TRIGGER_NAMES)
+}
+for _prefix, _stick in (("ls", "leftstick"), ("rs", "rightstick")):
+    for _direction in ("up", "down", "left", "right"):
+        STICK_NAME_TO_ID[_prefix + _direction] = STICK_NAME_TO_ID[_stick + _direction]
+
+
+def shortcut_trigger_valid(trigger):
+    return trigger < BUTTON_SOURCE_COUNT or STICK_TRIGGER_FIRST <= trigger <= STICK_TRIGGER_LAST
+
+
+def opposite_stick_directions(a, b):
+    if not (STICK_TRIGGER_FIRST <= a <= STICK_TRIGGER_LAST and
+            STICK_TRIGGER_FIRST <= b <= STICK_TRIGGER_LAST):
+        return False
+    return ((a - STICK_TRIGGER_FIRST) ^ (b - STICK_TRIGGER_FIRST)) == 1
+
 
 # These are CLI-only conveniences, not ButtonId enum members. Clearing a remap
 # now writes the source button's own ID (an identity mapping) to the table.
@@ -507,10 +536,14 @@ def cmd_set(args):
             print(f"  note: {name} was clamped by firmware to {fmt_value(name, got)}")
 
 
-def parse_button(raw, *, source):
+def parse_button(raw, *, source, shortcut=False):
     key = normalize_button_name(raw)
+    if shortcut and key in STICK_NAME_TO_ID:
+        return STICK_NAME_TO_ID[key]
     if key not in BUTTON_NAME_TO_ID:
         valid_names = BUTTON_NAMES[:-1] if source else BUTTON_NAMES + ("NoMap",)
+        if shortcut:
+            valid_names = valid_names + STICK_TRIGGER_NAMES
         valid = ", ".join(valid_names)
         sys.exit(f"Unknown button '{raw}'. Valid buttons: {valid}.")
     button_id = BUTTON_NAME_TO_ID[key]
@@ -520,7 +553,11 @@ def parse_button(raw, *, source):
 
 
 def button_name(button_id):
-    return BUTTON_NAMES[button_id] if 0 <= button_id < BUTTON_COUNT else f"Invalid({button_id})"
+    if 0 <= button_id < BUTTON_COUNT:
+        return BUTTON_NAMES[button_id]
+    if STICK_TRIGGER_FIRST <= button_id <= STICK_TRIGGER_LAST:
+        return STICK_TRIGGER_NAMES[button_id - STICK_TRIGGER_FIRST]
+    return f"Invalid({button_id})"
 
 
 def parse_remap_assignment(token):
@@ -630,13 +667,13 @@ def format_keyboard_chord(modifiers, keys):
 def shortcut_slot_valid(shortcut):
     """Mirror of shortcut_slot_valid() in src/button_shortcut.cpp."""
     trigger_a, trigger_b, action, payload, flags = shortcut
-    if trigger_a >= BUTTON_SOURCE_COUNT:
+    if not shortcut_trigger_valid(trigger_a):
         return False
     if flags & ~SHORTCUT_FLAG_MASK:
         return False
     if flags & SHORTCUT_FLAG_MODIFIER_HOLD and (
         flags != SHORTCUT_FLAG_MODIFIER_HOLD or action != SHORTCUT_ACTION_KEYBOARD
-        or trigger_b >= BUTTON_SOURCE_COUNT or payload[0] == 0 or payload[1] < 0x04
+        or not shortcut_trigger_valid(trigger_b) or payload[0] == 0 or payload[1] < 0x04
     ):
         return False
     if flags & SHORTCUT_FLAG_HOLD and (
@@ -648,9 +685,11 @@ def shortcut_slot_valid(shortcut):
         if flags & SHORTCUT_FLAG_DOUBLE_TAP:
             return False
     else:
-        if trigger_b >= BUTTON_SOURCE_COUNT or trigger_a == trigger_b:
+        if not shortcut_trigger_valid(trigger_b) or trigger_a == trigger_b:
             return False
         if trigger_a <= DPAD_MAX and trigger_b <= DPAD_MAX:
+            return False
+        if opposite_stick_directions(trigger_a, trigger_b):
             return False
     if action == SHORTCUT_ACTION_KEYBOARD:
         return payload[1] <= KEY_USAGE_MAX and (payload[0] != 0 or payload[1] != 0)
@@ -739,7 +778,7 @@ def parse_shortcut_assignment(token):
             if taps_raw not in ("1", "2"):
                 sys.exit("A tap trigger supports '*1' (single) or '*2' (double) only.")
             taps = int(taps_raw)
-        trigger_ids = [parse_button(name.strip(), source=True),
+        trigger_ids = [parse_button(name.strip(), source=True, shortcut=True),
                        TRIGGER_TAP if taps == 1 else TRIGGER_DOUBLE_TAP]
     elif len(triggers) == 2:
         # A trailing "*2" on the second button asks for a double-tapped chord.
@@ -752,12 +791,14 @@ def parse_shortcut_assignment(token):
             if taps_raw.strip() == "2":
                 flags |= SHORTCUT_FLAG_DOUBLE_TAP
             triggers[1] = name.strip()
-        trigger_ids = [parse_button(part, source=True) for part in triggers]
+        trigger_ids = [parse_button(part, source=True, shortcut=True) for part in triggers]
         if trigger_ids[0] == trigger_ids[1]:
             sys.exit("The two controller buttons in a shortcut must be different.")
         if trigger_ids[0] <= DPAD_MAX and trigger_ids[1] <= DPAD_MAX:
             sys.exit("A shortcut cannot use two DPad directions: the DPad reports a single "
                      "direction at a time, so the chord could never fire.")
+        if opposite_stick_directions(*trigger_ids):
+            sys.exit("A shortcut cannot use opposite directions of the same stick.")
     else:
         sys.exit("A shortcut needs one button (tap trigger) or two buttons (chord).")
 

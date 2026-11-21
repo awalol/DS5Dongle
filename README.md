@@ -271,6 +271,11 @@ Triggers:
 - `Button1+Button2` — fires when both buttons become held, and can fire again after either is released
 - `Button1+Button2*2` — requires the chord to be formed twice
 
+Analog stick directions work as buttons in any trigger: `LeftStickUp`, `LeftStickDown`,
+`LeftStickLeft`, `LeftStickRight`, and the same for `RightStick…` (short forms `LSUp`, `RSLeft`, …).
+A direction counts as pressed past ~63% deflection and released below ~44%, so a stick
+resting near the edge does not retrigger.
+
 If a button has both single- and double-tap actions, the single-tap action is delayed
 until the 250 ms window closes. Otherwise, a single tap fires immediately.
 
@@ -281,6 +286,7 @@ python tools/config_tool.py shortcut
 python tools/config_tool.py shortcut 1=PS+Create:Win+PrintScreen
 python tools/config_tool.py shortcut 2=PS+UP:VolumeUp
 python tools/config_tool.py shortcut 3=PS+DOWN:VolumeDown
+python tools/config_tool.py shortcut 5=PS+LeftStickUp:VolumeUp
 python tools/config_tool.py shortcut 4=PS:Win+G
 python tools/config_tool.py shortcut 6=PS*2:Win+Tab
 python tools/config_tool.py shortcut 1=off
@@ -301,6 +307,8 @@ actions do not require the USB HID interfaces.
 Limitations:
 
 - Trigger buttons are **not swallowed**. They still reach the game, so a chord using **PS** may also open the Steam overlay or Game Bar. Prefer buttons without a global binding.
+- Stick movement is **not swallowed** either: the game still sees the stick while a stick chord is used.
+- Opposite directions of the same stick (for example `LeftStickUp+LeftStickDown`) cannot form a chord.
 - Two DPad directions cannot form a chord because the controller reports only one DPad direction at a time; the tool rejects such pairs.
 - Due to a Windows limitation, volume actions adjust the DualSense audio endpoint only; they cannot adjust the currently selected default audio device.
 
